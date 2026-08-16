@@ -1,0 +1,66 @@
+name: cascade
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cascade
+      POSTGRES_PASSWORD: cascade
+      POSTGRES_DB: cascade
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cascade"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP receiver
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      CASCADE_ENVIRONMENT: development
+      CASCADE_DATABASE_URL: postgresql+asyncpg://cascade:cascade@postgres:5432/cascade
+      CASCADE_REDIS_URL: redis://redis:6379/0
+      CASCADE_OTEL_ENABLED: "true"
+      CASCADE_OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      CASCADE_AUTH_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head && cascade"
+
+volumes:
+  postgres-data:
