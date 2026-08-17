@@ -16,10 +16,17 @@ from cascade.application.ingestion.commands import DeadLetterInput, RegisterSour
 from cascade.application.ingestion.service import IngestionApplicationService
 from cascade.application.pipelines.commands import ConnectorInput, RegisterPipelineCommand
 from cascade.application.pipelines.service import PipelineApplicationService
+from cascade.application.processing.commands import (
+    CheckpointInput,
+    DefineJobCommand,
+    EndpointInput,
+)
+from cascade.application.processing.service import StreamProcessingApplicationService
 from cascade.infrastructure.config import get_settings
 from cascade.infrastructure.connect.factory import build_connector_runtime
 from cascade.infrastructure.database.engine import create_engine, create_session_factory
 from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+from cascade.infrastructure.flink.factory import build_flink_runtime
 from cascade.infrastructure.logging import configure_logging
 from cascade.infrastructure.registry.factory import build_schema_registry
 
@@ -71,6 +78,9 @@ async def _seed() -> None:
     ingestion_service = IngestionApplicationService(
         lambda: SqlAlchemyUnitOfWork(session_factory), build_connector_runtime(settings)
     )
+    processing_service = StreamProcessingApplicationService(
+        lambda: SqlAlchemyUnitOfWork(session_factory), build_flink_runtime(settings)
+    )
     try:
         for command in _SEEDS:
             try:
@@ -113,6 +123,23 @@ async def _seed() -> None:
                 )
             except ConflictError:
                 _logger.info("seed_source_skipped", name="orders-postgres-cdc")
+
+            try:
+                job_view = await processing_service.define_job(
+                    DefineJobCommand(
+                        name="orders-enrichment",
+                        source=EndpointInput(kind="kafka_topic", resource="cdc.public.orders"),
+                        sink=EndpointInput(kind="iceberg", resource="silver.orders_enriched"),
+                        delivery_guarantee="exactly_once",
+                        checkpoint=CheckpointInput(interval_ms=30_000),
+                        parallelism=2,
+                        contract_id=orders_contract_id,
+                        description="Enrich order events and land them in the silver lakehouse layer.",
+                    )
+                )
+                _logger.info("seed_job_created", name=job_view.name, id=job_view.id)
+            except ConflictError:
+                _logger.info("seed_job_skipped", name="orders-enrichment")
     finally:
         await engine.dispose()
 

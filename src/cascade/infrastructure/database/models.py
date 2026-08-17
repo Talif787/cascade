@@ -142,3 +142,51 @@ class IngestionSourceModel(Base):
         Index("ix_ingestion_sources_contract_id", "contract_id"),
         Index("ix_ingestion_sources_created_at", "created_at"),
     )
+
+
+_JOB_STATUS_VALUES = (
+    "defined",
+    "submitted",
+    "running",
+    "restarting",
+    "suspended",
+    "failed",
+    "completed",
+    "cancelled",
+)
+
+
+class StreamJobModel(Base):
+    __tablename__ = "stream_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(63), nullable=False, unique=True)
+    source: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    sink: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    delivery_guarantee: Mapped[str] = mapped_column(String(16), nullable=False)
+    checkpoint_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    restart_strategy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    parallelism: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    contract_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("data_contracts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    runtime_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    savepoint_location: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {_JOB_STATUS_VALUES}", name="ck_stream_jobs_status"),
+        CheckConstraint(
+            "delivery_guarantee IN ('exactly_once', 'at_least_once')",
+            name="ck_stream_jobs_delivery_guarantee",
+        ),
+        Index("ix_stream_jobs_status", "status"),
+        Index("ix_stream_jobs_contract_id", "contract_id"),
+        Index("ix_stream_jobs_created_at", "created_at"),
+    )

@@ -7,6 +7,7 @@ from types import TracebackType
 from cascade.domain.contracts.repository import DataContractRepository
 from cascade.domain.ingestion.repository import IngestionSourceRepository
 from cascade.domain.pipelines.repository import PipelineRepository
+from cascade.domain.processing.repository import StreamJobRepository
 
 
 class UnitOfWork(ABC):
@@ -15,6 +16,7 @@ class UnitOfWork(ABC):
     pipelines: PipelineRepository
     contracts: DataContractRepository
     ingestion_sources: IngestionSourceRepository
+    stream_jobs: StreamJobRepository
 
     async def __aenter__(self) -> UnitOfWork:
         return self
