@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    schema_registry_url: str | None = None
+    default_compatibility_mode: str = "backward"
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

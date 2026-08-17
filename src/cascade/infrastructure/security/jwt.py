@@ -92,7 +92,14 @@ class AllowAllTokenVerifier(TokenVerifier):
     def verify(self, token: str) -> Principal:
         return Principal(
             subject="anonymous",
-            scopes=frozenset({"pipelines:read", "pipelines:write"}),
+            scopes=frozenset(
+                {
+                    "pipelines:read",
+                    "pipelines:write",
+                    "contracts:read",
+                    "contracts:write",
+                }
+            ),
         )
 
 

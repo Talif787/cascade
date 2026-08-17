@@ -7,8 +7,9 @@ processing jobs, and serve platform metadata. The compute-heavy data plane (Kafk
 Debezium, Flink, Iceberg) scales horizontally on its own and is layered in over the
 phases described below.
 
-This repository currently contains Phase 1: the control-plane foundation plus a
-complete vertical slice for the Pipeline aggregate.
+This repository currently contains Phases 1 and 2: the control-plane foundation with a
+complete vertical slice for the Pipeline aggregate, plus the Data Contracts bounded
+context with a schema compatibility engine and pluggable schema registry.
 
 ## Why a modular monolith
 
@@ -106,21 +107,31 @@ curl -X POST http://localhost:8000/api/v1/pipelines \
 curl "http://localhost:8000/api/v1/pipelines?page=1&size=20&status=draft"
 ```
 
-## API surface (Phase 1)
+## API surface
 
-| Method | Path                                  | Scope             |
-| ------ | ------------------------------------- | ----------------- |
-| POST   | `/api/v1/pipelines`                   | `pipelines:write` |
-| GET    | `/api/v1/pipelines`                   | `pipelines:read`  |
-| GET    | `/api/v1/pipelines/{id}`              | `pipelines:read`  |
-| POST   | `/api/v1/pipelines/{id}/activate`     | `pipelines:write` |
-| POST   | `/api/v1/pipelines/{id}/pause`        | `pipelines:write` |
-| POST   | `/api/v1/pipelines/{id}/archive`      | `pipelines:write` |
-| GET    | `/livez`, `/readyz`, `/metrics`       | none              |
+| Method | Path                                              | Scope             |
+| ------ | ------------------------------------------------- | ----------------- |
+| POST   | `/api/v1/pipelines`                               | `pipelines:write` |
+| GET    | `/api/v1/pipelines`                               | `pipelines:read`  |
+| GET    | `/api/v1/pipelines/{id}`                          | `pipelines:read`  |
+| POST   | `/api/v1/pipelines/{id}/activate`                 | `pipelines:write` |
+| POST   | `/api/v1/pipelines/{id}/pause`                    | `pipelines:write` |
+| POST   | `/api/v1/pipelines/{id}/archive`                  | `pipelines:write` |
+| POST   | `/api/v1/contracts`                               | `contracts:write` |
+| GET    | `/api/v1/contracts`                               | `contracts:read`  |
+| GET    | `/api/v1/contracts/{id}`                          | `contracts:read`  |
+| GET    | `/api/v1/contracts/{id}/versions/{version}`       | `contracts:read`  |
+| POST   | `/api/v1/contracts/{id}/versions`                 | `contracts:write` |
+| POST   | `/api/v1/contracts/{id}/compatibility`            | `contracts:read`  |
+| PUT    | `/api/v1/contracts/{id}/compatibility-mode`       | `contracts:write` |
+| POST   | `/api/v1/contracts/{id}/versions/{version}/deprecate` | `contracts:write` |
+| POST   | `/api/v1/contracts/{id}/deprecate`                | `contracts:write` |
+| GET    | `/livez`, `/readyz`, `/metrics`                   | none              |
 
 The OpenAPI 3.1 document is served at `/openapi.json`. Errors follow RFC 7807
 (`application/problem+json`) and carry the correlation id. Registration is idempotent
-via the `Idempotency-Key` header.
+via the `Idempotency-Key` header. A rejected schema publish returns 409 with the
+`compatibility_mode` and the list of `violations`.
 
 ## Testing
 
@@ -139,8 +150,8 @@ in Phase 9.
 
 ## Roadmap
 
-1. Control-plane foundation and Pipeline slice (this repository).
-2. Data Contracts and Schema Registry integration.
+1. Control-plane foundation and Pipeline slice (done).
+2. Data Contracts and Schema Registry integration (done).
 3. Ingestion data plane: Debezium, Kafka Connect, producer SDK, dead-letter queues.
 4. Stream processing: Flink jobs with exactly-once Iceberg sinks.
 5. Lakehouse and transformations: Iceberg medallion tables, dbt, Airflow, data quality.
@@ -152,6 +163,7 @@ in Phase 9.
 ## Documentation
 
 - `docs/architecture.md`
+- `docs/data-contracts.md`
 - `docs/configuration.md`
 - `docs/local-development.md`
 - `docs/runbook.md`
