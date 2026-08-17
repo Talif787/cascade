@@ -25,11 +25,13 @@ src/cascade/
     pipelines/       Pipeline aggregate, value objects, events, repository port
     contracts/       DataContract aggregate, schema value objects, compatibility engine
     ingestion/       IngestionSource aggregate, connector value objects, dead-letter policy
+    processing/      StreamJob aggregate, checkpoint config, source/sink value objects
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
     contracts/       commands, queries, DTOs, SchemaRegistry port, service
     ingestion/       commands, queries, DTOs, ConnectorRuntime port, service
+    processing/      commands, queries, DTOs, FlinkRuntime port, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -39,6 +41,7 @@ src/cascade/
     repositories/    SQLAlchemy repository implementations
     registry/        schema serialization and in-memory / Confluent adapters
     connect/         connector runtime: in-memory and Kafka Connect adapters
+    flink/           Flink runtime: in-memory and Flink REST adapters, job config builder
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   sdk/               standalone producer client and record validator (httpx + stdlib only)
@@ -108,6 +111,26 @@ always follows what the runtime actually did. Cross-context references are enfor
 registration and with database foreign keys. The producer SDK under `sdk/` is intentionally
 kept free of any server dependency so a data-plane producer can vendor it. See
 `docs/ingestion.md` for the state machine, dead-letter semantics, and endpoint list.
+
+## The StreamJob aggregate
+
+`StreamJob` governs a Flink stream-processing job. It owns a lifecycle state machine
+(defined, submitted, running, restarting, suspended, failed, completed, cancelled), a
+checkpoint configuration, a restart strategy, a source, and a sink, and it optionally
+references the data contract for the schema it processes. The defining invariant, enforced
+in the domain at `define()` and re-checked whenever the checkpoint config changes, is that
+a sink which needs exactly-once (Iceberg) requires the exactly-once delivery guarantee with
+checkpointing enabled, because Flink commits Iceberg writes in step with its checkpoints.
+Pairing an Iceberg sink with at-least-once is rejected as invalid input.
+
+The Flink cluster is abstracted behind the `FlinkRuntime` port, following the same pattern
+as the schema registry and connector runtime: an in-memory adapter is the default so the
+stack and tests need no Flink, and a `FlinkRestRuntime` adapter drives the Flink REST API
+when `CASCADE_FLINK_REST_URL` is set. Suspend maps to a stop-with-savepoint, and the
+returned savepoint path is stored so resume can restart the job from exactly that state,
+which is how exactly-once survives an operator-driven restart. Submission is a two-step
+orchestration so stored state follows what the cluster actually did. See
+`docs/processing.md` for the state machine, exactly-once rules, and endpoint list.
 
 ## Cross-cutting concerns
 

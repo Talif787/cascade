@@ -9,6 +9,8 @@ from cascade.application.contracts.service import DataContractApplicationService
 from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.application.ingestion.service import IngestionApplicationService
 from cascade.application.pipelines.service import PipelineApplicationService
+from cascade.application.processing.runtime import FlinkRuntime
+from cascade.application.processing.service import StreamProcessingApplicationService
 from cascade.infrastructure.cache.base import Cache
 from cascade.infrastructure.config import Settings
 
@@ -29,6 +31,10 @@ def get_connector_runtime(request: Request) -> ConnectorRuntime:
     return cast(ConnectorRuntime, request.app.state.connector_runtime)
 
 
+def get_flink_runtime(request: Request) -> FlinkRuntime:
+    return cast(FlinkRuntime, request.app.state.flink_runtime)
+
+
 def get_pipeline_service(request: Request) -> PipelineApplicationService:
     return PipelineApplicationService(request.app.state.uow_factory)
 
@@ -45,8 +51,17 @@ def get_ingestion_service(request: Request) -> IngestionApplicationService:
     )
 
 
+def get_processing_service(request: Request) -> StreamProcessingApplicationService:
+    return StreamProcessingApplicationService(
+        request.app.state.uow_factory, request.app.state.flink_runtime
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 PipelineServiceDep = Annotated[PipelineApplicationService, Depends(get_pipeline_service)]
 ContractServiceDep = Annotated[DataContractApplicationService, Depends(get_contract_service)]
 IngestionServiceDep = Annotated[IngestionApplicationService, Depends(get_ingestion_service)]
+ProcessingServiceDep = Annotated[
+    StreamProcessingApplicationService, Depends(get_processing_service)
+]

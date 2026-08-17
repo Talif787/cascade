@@ -19,6 +19,9 @@ the `CASCADE_` prefix and can also be placed in a `.env` file for local developm
 | `CASCADE_SCHEMA_REGISTRY_URL`         | empty                                     | Confluent-compatible registry URL; empty uses the in-memory adapter. |
 | `CASCADE_DEFAULT_COMPATIBILITY_MODE`  | `backward`                                | Default compatibility mode for new contracts.      |
 | `CASCADE_KAFKA_CONNECT_URL`           | empty                                     | Kafka Connect REST URL for the ingestion runtime; empty uses the in-memory adapter. |
+| `CASCADE_FLINK_REST_URL`              | empty                                     | Flink cluster REST URL for the processing runtime; empty uses the in-memory adapter. |
+| `CASCADE_FLINK_JAR_ID`                | empty                                     | Uploaded job jar id used when submitting Flink jobs. Required alongside the REST URL. |
+| `CASCADE_FLINK_ENTRY_CLASS`           | empty                                     | Optional entry class for the Flink job jar.        |
 | `CASCADE_AUTH_ENABLED`                | `true`                                    | When false, all requests are treated as authorized (local only). |
 | `CASCADE_JWT_ALGORITHM`               | `HS256`                                   | Signing algorithm.                                 |
 | `CASCADE_JWT_SECRET`                  | `change-me-in-production`                 | HS256 shared secret.                               |

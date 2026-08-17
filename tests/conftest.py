@@ -15,6 +15,11 @@ from cascade.application.ingestion.runtime import (
     ConnectorRuntime,
     ConnectorSpec,
 )
+from cascade.application.processing.runtime import (
+    FlinkRuntime,
+    JobHandle,
+    JobSpec,
+)
 from cascade.domain.contracts.aggregate import DataContract
 from cascade.domain.contracts.entities import SchemaVersion
 from cascade.domain.contracts.repository import (
@@ -42,6 +47,13 @@ from cascade.domain.pipelines.repository import (
     PipelineSortField,
 )
 from cascade.domain.pipelines.value_objects import PipelineId, PipelineName
+from cascade.domain.processing.aggregate import StreamJob
+from cascade.domain.processing.repository import (
+    JobSortField,
+    StreamJobQuery,
+    StreamJobRepository,
+)
+from cascade.domain.processing.value_objects import JobName, StreamJobId
 from cascade.infrastructure.cache.base import Cache, IdempotentResponse, RateLimitDecision
 from cascade.infrastructure.config import Environment, Settings
 from cascade.infrastructure.security.jwt import Principal, TokenVerifier
@@ -66,6 +78,13 @@ _SOURCE_SORT_KEYS = {
     SourceSortField.STATUS: lambda s: s.status.value,
     SourceSortField.CREATED_AT: lambda s: s.created_at,
     SourceSortField.UPDATED_AT: lambda s: s.updated_at,
+}
+
+_JOB_SORT_KEYS = {
+    JobSortField.NAME: lambda j: str(j.name),
+    JobSortField.STATUS: lambda j: j.status.value,
+    JobSortField.CREATED_AT: lambda j: j.created_at,
+    JobSortField.UPDATED_AT: lambda j: j.updated_at,
 }
 
 
@@ -129,15 +148,18 @@ class InMemoryUnitOfWork(UnitOfWork):
         pipeline_store: dict[uuid.UUID, Pipeline],
         contract_store: dict[uuid.UUID, DataContract],
         source_store: dict[uuid.UUID, IngestionSource] | None = None,
+        job_store: dict[uuid.UUID, StreamJob] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
         self._source_store = source_store if source_store is not None else {}
+        self._job_store = job_store if job_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
         self.contracts = InMemoryDataContractRepository(self._contract_store)
         self.ingestion_sources = InMemoryIngestionSourceRepository(self._source_store)
+        self.stream_jobs = InMemoryStreamJobRepository(self._job_store)
         return self
 
     async def commit(self) -> None:
@@ -318,6 +340,103 @@ class FakeConnectorRuntime(ConnectorRuntime):
         return ConnectorHandle(name=name, state=state) if state is not None else None
 
 
+def _clone_job(job: StreamJob) -> StreamJob:
+    return StreamJob(
+        job.id,
+        name=job.name,
+        source=job.source,
+        sink=job.sink,
+        delivery_guarantee=job.delivery_guarantee,
+        checkpoint_config=job.checkpoint_config,
+        restart_strategy=job.restart_strategy,
+        parallelism=job.parallelism,
+        contract_id=job.contract_id,
+        status=job.status,
+        runtime_ref=job.runtime_ref,
+        savepoint_location=job.savepoint_location,
+        description=job.description,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        version=job.version,
+    )
+
+
+class InMemoryStreamJobRepository(StreamJobRepository):
+    def __init__(self, store: dict[uuid.UUID, StreamJob]) -> None:
+        self._store = store
+
+    async def add(self, job: StreamJob) -> None:
+        if any(str(j.name) == str(job.name) for j in self._store.values()):
+            raise ConflictError(f"job name {job.name!s} is already in use")
+        self._store[job.id.value] = _clone_job(job)
+
+    async def update(self, job: StreamJob) -> None:
+        current = self._store.get(job.id.value)
+        if current is None or current.version != job.version:
+            raise ConcurrencyError(f"job {job.id!s} was modified concurrently")
+        job._version = job.version + 1
+        self._store[job.id.value] = _clone_job(job)
+
+    async def get(self, job_id: StreamJobId) -> StreamJob | None:
+        found = self._store.get(job_id.value)
+        return _clone_job(found) if found is not None else None
+
+    async def get_by_name(self, name: JobName) -> StreamJob | None:
+        for job in self._store.values():
+            if str(job.name) == str(name):
+                return _clone_job(job)
+        return None
+
+    async def exists_by_name(self, name: JobName) -> bool:
+        return any(str(j.name) == str(name) for j in self._store.values())
+
+    async def list(self, query: StreamJobQuery) -> tuple[list[StreamJob], int]:
+        items = list(self._store.values())
+        if query.status is not None:
+            items = [j for j in items if j.status == query.status]
+        if query.sink_kind is not None:
+            items = [j for j in items if j.sink.kind == query.sink_kind]
+        if query.delivery_guarantee is not None:
+            items = [j for j in items if j.delivery_guarantee == query.delivery_guarantee]
+        if query.contract_id is not None:
+            items = [j for j in items if j.contract_id == query.contract_id]
+        items.sort(key=_JOB_SORT_KEYS[query.sort_by], reverse=query.descending)
+        total = len(items)
+        window = items[query.offset : query.offset + query.limit]
+        return [_clone_job(j) for j in window], total
+
+
+class FakeFlinkRuntime(FlinkRuntime):
+    def __init__(self, fail_on_submit: bool = False) -> None:
+        self.fail_on_submit = fail_on_submit
+        self.jobs: dict[str, str] = {}
+        self._counter = 0
+
+    async def submit(self, spec: JobSpec) -> JobHandle:
+        if self.fail_on_submit:
+            from cascade.application.processing.runtime import FlinkRuntimeError
+
+            raise FlinkRuntimeError("submit rejected")
+        self._counter += 1
+        job_id = f"flink-job-{self._counter}"
+        self.jobs[job_id] = "RUNNING"
+        return JobHandle(job_id=job_id, state="RUNNING")
+
+    async def stop_with_savepoint(self, job_id: str) -> str:
+        self.jobs[job_id] = "FINISHED"
+        return f"s3://savepoints/{job_id}/sp-1"
+
+    async def trigger_savepoint(self, job_id: str) -> str:
+        return f"s3://savepoints/{job_id}/sp-adhoc"
+
+    async def cancel(self, job_id: str) -> None:
+        self.jobs.pop(job_id, None)
+
+    async def status(self, job_id: str) -> JobHandle | None:
+        state = self.jobs.get(job_id)
+        return JobHandle(job_id=job_id, state=state) if state is not None else None
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -351,6 +470,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "contracts:write",
                     "ingestion:read",
                     "ingestion:write",
+                    "processing:read",
+                    "processing:write",
                 }
             ),
         )
@@ -383,8 +504,18 @@ def source_store() -> dict[uuid.UUID, IngestionSource]:
 
 
 @pytest.fixture
+def job_store() -> dict[uuid.UUID, StreamJob]:
+    return {}
+
+
+@pytest.fixture
 def connector_runtime() -> FakeConnectorRuntime:
     return FakeConnectorRuntime()
+
+
+@pytest.fixture
+def flink_runtime() -> FakeFlinkRuntime:
+    return FakeFlinkRuntime()
 
 
 @pytest.fixture
@@ -397,18 +528,21 @@ def components(
     store: dict[uuid.UUID, Pipeline],
     contract_store: dict[uuid.UUID, DataContract],
     source_store: dict[uuid.UUID, IngestionSource],
+    job_store: dict[uuid.UUID, StreamJob],
     connector_runtime: FakeConnectorRuntime,
+    flink_runtime: FakeFlinkRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store),
+        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store, job_store),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
         connector_runtime=connector_runtime,
+        flink_runtime=flink_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -432,7 +566,14 @@ class ReadOnlyTokenVerifier(TokenVerifier):
     def verify(self, token: str) -> Principal:
         return Principal(
             subject="read-only-user",
-            scopes=frozenset({"pipelines:read", "contracts:read", "ingestion:read"}),
+            scopes=frozenset(
+                {
+                    "pipelines:read",
+                    "contracts:read",
+                    "ingestion:read",
+                    "processing:read",
+                }
+            ),
         )
 
 
@@ -441,18 +582,21 @@ def readonly_components(
     store: dict[uuid.UUID, Pipeline],
     contract_store: dict[uuid.UUID, DataContract],
     source_store: dict[uuid.UUID, IngestionSource],
+    job_store: dict[uuid.UUID, StreamJob],
     connector_runtime: FakeConnectorRuntime,
+    flink_runtime: FakeFlinkRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store),
+        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store, job_store),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
         connector_runtime=connector_runtime,
+        flink_runtime=flink_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 

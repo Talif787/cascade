@@ -44,6 +44,10 @@ class Settings(BaseSettings):
 
     kafka_connect_url: str | None = None
 
+    flink_rest_url: str | None = None
+    flink_jar_id: str | None = None
+    flink_entry_class: str | None = None
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

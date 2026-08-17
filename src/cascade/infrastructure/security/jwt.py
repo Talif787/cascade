@@ -100,6 +100,8 @@ class AllowAllTokenVerifier(TokenVerifier):
                     "contracts:write",
                     "ingestion:read",
                     "ingestion:write",
+                    "processing:read",
+                    "processing:write",
                 }
             ),
         )
