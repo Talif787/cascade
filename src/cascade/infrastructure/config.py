@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     flink_jar_id: str | None = None
     flink_entry_class: str | None = None
 
+    dbt_cloud_api_url: str | None = None
+    dbt_cloud_account_id: str | None = None
+    dbt_cloud_job_id: str | None = None
+    dbt_cloud_token: str | None = None
+
+    airflow_api_url: str | None = None
+    airflow_username: str | None = None
+    airflow_password: str | None = None
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

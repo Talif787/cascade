@@ -22,6 +22,13 @@ the `CASCADE_` prefix and can also be placed in a `.env` file for local developm
 | `CASCADE_FLINK_REST_URL`              | empty                                     | Flink cluster REST URL for the processing runtime; empty uses the in-memory adapter. |
 | `CASCADE_FLINK_JAR_ID`                | empty                                     | Uploaded job jar id used when submitting Flink jobs. Required alongside the REST URL. |
 | `CASCADE_FLINK_ENTRY_CLASS`           | empty                                     | Optional entry class for the Flink job jar.        |
+| `CASCADE_DBT_CLOUD_API_URL`           | empty                                     | dbt Cloud API URL for the transformation runtime; empty uses the in-memory adapter. |
+| `CASCADE_DBT_CLOUD_ACCOUNT_ID`        | empty                                     | dbt Cloud account id. Required alongside the API URL. |
+| `CASCADE_DBT_CLOUD_JOB_ID`            | empty                                     | dbt Cloud job id triggered on materialize. Required alongside the API URL. |
+| `CASCADE_DBT_CLOUD_TOKEN`             | empty                                     | dbt Cloud API token. Required alongside the API URL. |
+| `CASCADE_AIRFLOW_API_URL`             | empty                                     | Airflow REST URL for the orchestrator; empty uses the in-memory adapter. |
+| `CASCADE_AIRFLOW_USERNAME`            | empty                                     | Airflow basic-auth username. Required alongside the API URL. |
+| `CASCADE_AIRFLOW_PASSWORD`            | empty                                     | Airflow basic-auth password. Required alongside the API URL. |
 | `CASCADE_AUTH_ENABLED`                | `true`                                    | When false, all requests are treated as authorized (local only). |
 | `CASCADE_JWT_ALGORITHM`               | `HS256`                                   | Signing algorithm.                                 |
 | `CASCADE_JWT_SECRET`                  | `change-me-in-production`                 | HS256 shared secret.                               |
