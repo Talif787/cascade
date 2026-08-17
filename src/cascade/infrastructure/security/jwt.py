@@ -98,6 +98,8 @@ class AllowAllTokenVerifier(TokenVerifier):
                     "pipelines:write",
                     "contracts:read",
                     "contracts:write",
+                    "ingestion:read",
+                    "ingestion:write",
                 }
             ),
         )

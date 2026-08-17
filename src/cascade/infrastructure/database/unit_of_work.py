@@ -6,6 +6,9 @@ from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.infrastructure.repositories.contract_repository import (
     SqlAlchemyDataContractRepository,
 )
+from cascade.infrastructure.repositories.ingestion_repository import (
+    SqlAlchemyIngestionSourceRepository,
+)
 from cascade.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
 
 
@@ -18,6 +21,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._session = self._session_factory()
         self.pipelines = SqlAlchemyPipelineRepository(self._session)
         self.contracts = SqlAlchemyDataContractRepository(self._session)
+        self.ingestion_sources = SqlAlchemyIngestionSourceRepository(self._session)
         return self
 
     async def commit(self) -> None:

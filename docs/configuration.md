@@ -18,6 +18,7 @@ the `CASCADE_` prefix and can also be placed in a `.env` file for local developm
 | `CASCADE_REDIS_URL`                   | `redis://localhost:6379/0`                | Redis DSN.                                         |
 | `CASCADE_SCHEMA_REGISTRY_URL`         | empty                                     | Confluent-compatible registry URL; empty uses the in-memory adapter. |
 | `CASCADE_DEFAULT_COMPATIBILITY_MODE`  | `backward`                                | Default compatibility mode for new contracts.      |
+| `CASCADE_KAFKA_CONNECT_URL`           | empty                                     | Kafka Connect REST URL for the ingestion runtime; empty uses the in-memory adapter. |
 | `CASCADE_AUTH_ENABLED`                | `true`                                    | When false, all requests are treated as authorized (local only). |
 | `CASCADE_JWT_ALGORITHM`               | `HS256`                                   | Signing algorithm.                                 |
 | `CASCADE_JWT_SECRET`                  | `change-me-in-production`                 | HS256 shared secret.                               |

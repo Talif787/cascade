@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     schema_registry_url: str | None = None
     default_compatibility_mode: str = "backward"
 
+    kafka_connect_url: str | None = None
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

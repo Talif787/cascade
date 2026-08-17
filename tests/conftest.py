@@ -10,6 +10,11 @@ from httpx import ASGITransport, AsyncClient
 from cascade.application.common.errors import ConcurrencyError, ConflictError
 from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.application.contracts.registry import RegistrationResult, SchemaRegistry
+from cascade.application.ingestion.runtime import (
+    ConnectorHandle,
+    ConnectorRuntime,
+    ConnectorSpec,
+)
 from cascade.domain.contracts.aggregate import DataContract
 from cascade.domain.contracts.entities import SchemaVersion
 from cascade.domain.contracts.repository import (
@@ -23,6 +28,13 @@ from cascade.domain.contracts.value_objects import (
     SchemaDefinition,
     SchemaFormat,
 )
+from cascade.domain.ingestion.aggregate import IngestionSource
+from cascade.domain.ingestion.repository import (
+    IngestionSourceQuery,
+    IngestionSourceRepository,
+    SourceSortField,
+)
+from cascade.domain.ingestion.value_objects import IngestionSourceId, SourceName
 from cascade.domain.pipelines.aggregate import Pipeline
 from cascade.domain.pipelines.repository import (
     PipelineQuery,
@@ -47,6 +59,13 @@ _CONTRACT_SORT_KEYS = {
     ContractSortField.STATUS: lambda c: c.status.value,
     ContractSortField.CREATED_AT: lambda c: c.created_at,
     ContractSortField.UPDATED_AT: lambda c: c.updated_at,
+}
+
+_SOURCE_SORT_KEYS = {
+    SourceSortField.NAME: lambda s: str(s.name),
+    SourceSortField.STATUS: lambda s: s.status.value,
+    SourceSortField.CREATED_AT: lambda s: s.created_at,
+    SourceSortField.UPDATED_AT: lambda s: s.updated_at,
 }
 
 
@@ -109,13 +128,16 @@ class InMemoryUnitOfWork(UnitOfWork):
         self,
         pipeline_store: dict[uuid.UUID, Pipeline],
         contract_store: dict[uuid.UUID, DataContract],
+        source_store: dict[uuid.UUID, IngestionSource] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
+        self._source_store = source_store if source_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
         self.contracts = InMemoryDataContractRepository(self._contract_store)
+        self.ingestion_sources = InMemoryIngestionSourceRepository(self._source_store)
         return self
 
     async def commit(self) -> None:
@@ -207,6 +229,95 @@ class FakeSchemaRegistry(SchemaRegistry):
         return True
 
 
+def _clone_source(source: IngestionSource) -> IngestionSource:
+    return IngestionSource(
+        source.id,
+        name=source.name,
+        connector_kind=source.connector_kind,
+        config=source.config,
+        contract_id=source.contract_id,
+        pipeline_id=source.pipeline_id,
+        status=source.status,
+        dead_letter_policy=source.dead_letter_policy,
+        dead_letter_count=source.dead_letter_count,
+        runtime_ref=source.runtime_ref,
+        description=source.description,
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+        version=source.version,
+    )
+
+
+class InMemoryIngestionSourceRepository(IngestionSourceRepository):
+    def __init__(self, store: dict[uuid.UUID, IngestionSource]) -> None:
+        self._store = store
+
+    async def add(self, source: IngestionSource) -> None:
+        if any(str(s.name) == str(source.name) for s in self._store.values()):
+            raise ConflictError(f"source name {source.name!s} is already in use")
+        self._store[source.id.value] = _clone_source(source)
+
+    async def update(self, source: IngestionSource) -> None:
+        current = self._store.get(source.id.value)
+        if current is None or current.version != source.version:
+            raise ConcurrencyError(f"source {source.id!s} was modified concurrently")
+        source._version = source.version + 1
+        self._store[source.id.value] = _clone_source(source)
+
+    async def get(self, source_id: IngestionSourceId) -> IngestionSource | None:
+        found = self._store.get(source_id.value)
+        return _clone_source(found) if found is not None else None
+
+    async def get_by_name(self, name: SourceName) -> IngestionSource | None:
+        for source in self._store.values():
+            if str(source.name) == str(name):
+                return _clone_source(source)
+        return None
+
+    async def exists_by_name(self, name: SourceName) -> bool:
+        return any(str(s.name) == str(name) for s in self._store.values())
+
+    async def list(self, query: IngestionSourceQuery) -> tuple[list[IngestionSource], int]:
+        items = list(self._store.values())
+        if query.status is not None:
+            items = [s for s in items if s.status == query.status]
+        if query.connector_kind is not None:
+            items = [s for s in items if s.connector_kind == query.connector_kind]
+        if query.contract_id is not None:
+            items = [s for s in items if s.contract_id == query.contract_id]
+        items.sort(key=_SOURCE_SORT_KEYS[query.sort_by], reverse=query.descending)
+        total = len(items)
+        window = items[query.offset : query.offset + query.limit]
+        return [_clone_source(s) for s in window], total
+
+
+class FakeConnectorRuntime(ConnectorRuntime):
+    def __init__(self, fail_on_deploy: bool = False) -> None:
+        self.fail_on_deploy = fail_on_deploy
+        self.deployed: dict[str, str] = {}
+
+    async def deploy(self, spec: ConnectorSpec) -> ConnectorHandle:
+        if self.fail_on_deploy:
+            from cascade.application.ingestion.runtime import ConnectorRuntimeError
+
+            raise ConnectorRuntimeError("deploy rejected")
+        self.deployed[spec.name] = "RUNNING"
+        return ConnectorHandle(name=spec.name, state="RUNNING")
+
+    async def pause(self, name: str) -> None:
+        self.deployed[name] = "PAUSED"
+
+    async def resume(self, name: str) -> None:
+        self.deployed[name] = "RUNNING"
+
+    async def delete(self, name: str) -> None:
+        self.deployed.pop(name, None)
+
+    async def status(self, name: str) -> ConnectorHandle | None:
+        state = self.deployed.get(name)
+        return ConnectorHandle(name=name, state=state) if state is not None else None
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -238,6 +349,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "pipelines:write",
                     "contracts:read",
                     "contracts:write",
+                    "ingestion:read",
+                    "ingestion:write",
                 }
             ),
         )
@@ -265,6 +378,16 @@ def contract_store() -> dict[uuid.UUID, DataContract]:
 
 
 @pytest.fixture
+def source_store() -> dict[uuid.UUID, IngestionSource]:
+    return {}
+
+
+@pytest.fixture
+def connector_runtime() -> FakeConnectorRuntime:
+    return FakeConnectorRuntime()
+
+
+@pytest.fixture
 def cache() -> FakeCache:
     return FakeCache()
 
@@ -273,16 +396,19 @@ def cache() -> FakeCache:
 def components(
     store: dict[uuid.UUID, Pipeline],
     contract_store: dict[uuid.UUID, DataContract],
+    source_store: dict[uuid.UUID, IngestionSource],
+    connector_runtime: FakeConnectorRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store),
+        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
+        connector_runtime=connector_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -306,7 +432,7 @@ class ReadOnlyTokenVerifier(TokenVerifier):
     def verify(self, token: str) -> Principal:
         return Principal(
             subject="read-only-user",
-            scopes=frozenset({"pipelines:read", "contracts:read"}),
+            scopes=frozenset({"pipelines:read", "contracts:read", "ingestion:read"}),
         )
 
 
@@ -314,16 +440,19 @@ class ReadOnlyTokenVerifier(TokenVerifier):
 def readonly_components(
     store: dict[uuid.UUID, Pipeline],
     contract_store: dict[uuid.UUID, DataContract],
+    source_store: dict[uuid.UUID, IngestionSource],
+    connector_runtime: FakeConnectorRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store),
+        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
+        connector_runtime=connector_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 
