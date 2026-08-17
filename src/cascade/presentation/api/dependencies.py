@@ -14,6 +14,8 @@ from cascade.application.lakehouse.transformation import TransformationRuntime
 from cascade.application.pipelines.service import PipelineApplicationService
 from cascade.application.processing.runtime import FlinkRuntime
 from cascade.application.processing.service import StreamProcessingApplicationService
+from cascade.application.serving.runtime import ClickHouseRuntime
+from cascade.application.serving.service import ServingApplicationService
 from cascade.infrastructure.cache.base import Cache
 from cascade.infrastructure.config import Settings
 
@@ -46,6 +48,10 @@ def get_orchestrator(request: Request) -> Orchestrator:
     return cast(Orchestrator, request.app.state.orchestrator)
 
 
+def get_clickhouse_runtime(request: Request) -> ClickHouseRuntime:
+    return cast(ClickHouseRuntime, request.app.state.clickhouse_runtime)
+
+
 def get_pipeline_service(request: Request) -> PipelineApplicationService:
     return PipelineApplicationService(request.app.state.uow_factory)
 
@@ -76,6 +82,12 @@ def get_lakehouse_service(request: Request) -> LakehouseApplicationService:
     )
 
 
+def get_serving_service(request: Request) -> ServingApplicationService:
+    return ServingApplicationService(
+        request.app.state.uow_factory, request.app.state.clickhouse_runtime
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 PipelineServiceDep = Annotated[PipelineApplicationService, Depends(get_pipeline_service)]
@@ -85,3 +97,4 @@ ProcessingServiceDep = Annotated[
     StreamProcessingApplicationService, Depends(get_processing_service)
 ]
 LakehouseServiceDep = Annotated[LakehouseApplicationService, Depends(get_lakehouse_service)]
+ServingServiceDep = Annotated[ServingApplicationService, Depends(get_serving_service)]

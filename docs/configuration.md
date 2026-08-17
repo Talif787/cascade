@@ -29,6 +29,10 @@ the `CASCADE_` prefix and can also be placed in a `.env` file for local developm
 | `CASCADE_AIRFLOW_API_URL`             | empty                                     | Airflow REST URL for the orchestrator; empty uses the in-memory adapter. |
 | `CASCADE_AIRFLOW_USERNAME`            | empty                                     | Airflow basic-auth username. Required alongside the API URL. |
 | `CASCADE_AIRFLOW_PASSWORD`            | empty                                     | Airflow basic-auth password. Required alongside the API URL. |
+| `CASCADE_CLICKHOUSE_URL`              | empty                                     | ClickHouse HTTP URL for the serving runtime; empty uses the in-memory adapter. |
+| `CASCADE_CLICKHOUSE_DATABASE`         | `default`                                 | ClickHouse database for served tables.             |
+| `CASCADE_CLICKHOUSE_USERNAME`         | `default`                                 | ClickHouse username.                               |
+| `CASCADE_CLICKHOUSE_PASSWORD`         | empty                                     | ClickHouse password.                               |
 | `CASCADE_AUTH_ENABLED`                | `true`                                    | When false, all requests are treated as authorized (local only). |
 | `CASCADE_JWT_ALGORITHM`               | `HS256`                                   | Signing algorithm.                                 |
 | `CASCADE_JWT_SECRET`                  | `change-me-in-production`                 | HS256 shared secret.                               |

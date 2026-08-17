@@ -29,6 +29,12 @@ from cascade.application.lakehouse.commands import (
     TransformationInput,
 )
 from cascade.application.lakehouse.service import LakehouseApplicationService
+from cascade.application.serving.commands import (
+    ColumnInput,
+    RegisterServingViewCommand,
+)
+from cascade.application.serving.service import ServingApplicationService
+from cascade.infrastructure.clickhouse.factory import build_clickhouse_runtime
 from cascade.infrastructure.config import get_settings
 from cascade.infrastructure.connect.factory import build_connector_runtime
 from cascade.infrastructure.database.engine import create_engine, create_session_factory
@@ -94,6 +100,9 @@ async def _seed() -> None:
         lambda: SqlAlchemyUnitOfWork(session_factory),
         build_transformation_runtime(settings),
         build_orchestrator(settings),
+    )
+    serving_service = ServingApplicationService(
+        lambda: SqlAlchemyUnitOfWork(session_factory), build_clickhouse_runtime(settings)
     )
     try:
         for command in _SEEDS:
@@ -187,6 +196,40 @@ async def _seed() -> None:
                     )
                 )
                 _logger.info("seed_dataset_created", name=silver.name, id=silver.id)
+                gold = await lakehouse_service.register_dataset(
+                    RegisterDatasetCommand(
+                        name="gold.orders_daily",
+                        layer="gold",
+                        transformation=TransformationInput(
+                            engine="dbt", identifier="gold_orders_daily"
+                        ),
+                        schedule=ScheduleInput(cron="0 3 * * *", enabled=True),
+                        upstream_ids=(silver.id,),
+                        quality_checks=(
+                            QualityCheckInput(kind="row_count_min", threshold=1),
+                        ),
+                        description="Daily order rollups for the serving layer.",
+                    )
+                )
+                _logger.info("seed_dataset_created", name=gold.name, id=gold.id)
+                view = await serving_service.register_serving_view(
+                    RegisterServingViewCommand(
+                        name="analytics.orders_daily",
+                        source_dataset_id=gold.id,
+                        engine="aggregating_merge_tree",
+                        columns=(
+                            ColumnInput(name="day", type="date", role="time"),
+                            ColumnInput(name="region", type="string", role="dimension"),
+                            ColumnInput(name="revenue", type="float", role="measure"),
+                            ColumnInput(name="orders", type="int", role="measure"),
+                        ),
+                        order_by=("day", "region"),
+                        partition_by="day",
+                        refresh_mode="full",
+                        description="Daily orders exposed to the analytics frontend.",
+                    )
+                )
+                _logger.info("seed_serving_view_created", name=view.name, id=view.id)
             except ConflictError:
                 _logger.info("seed_dataset_skipped", name="bronze.orders")
     finally:

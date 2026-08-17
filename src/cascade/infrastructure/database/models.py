@@ -245,3 +245,58 @@ class DatasetModel(Base):
         Index("ix_datasets_created_at", "created_at"),
         Index("ix_datasets_upstreams", "upstreams", postgresql_using="gin"),
     )
+
+
+_SERVING_STATUS_VALUES = (
+    "registered",
+    "syncing",
+    "ready",
+    "stale",
+    "failed",
+    "retired",
+)
+
+_SERVING_ENGINE_VALUES = (
+    "merge_tree",
+    "replacing_merge_tree",
+    "summing_merge_tree",
+    "aggregating_merge_tree",
+)
+
+
+class ServingViewModel(Base):
+    __tablename__ = "serving_views"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(127), nullable=False, unique=True)
+    source_dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    engine: Mapped[str] = mapped_column(String(32), nullable=False)
+    columns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    order_by: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    partition_by: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    refresh_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    refresh_cron: Mapped[str] = mapped_column(String(128), nullable=False)
+    refresh_enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_sync_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    synced_source_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {_SERVING_STATUS_VALUES}", name="ck_serving_views_status"),
+        CheckConstraint(f"engine IN {_SERVING_ENGINE_VALUES}", name="ck_serving_views_engine"),
+        Index("ix_serving_views_status", "status"),
+        Index("ix_serving_views_source_dataset_id", "source_dataset_id"),
+        Index("ix_serving_views_created_at", "created_at"),
+    )

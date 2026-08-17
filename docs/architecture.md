@@ -27,6 +27,7 @@ src/cascade/
     ingestion/       IngestionSource aggregate, connector value objects, dead-letter policy
     processing/      StreamJob aggregate, checkpoint config, source/sink value objects
     lakehouse/       Dataset aggregate, medallion layers, transformation, schedule, quality
+    serving/         ServingView aggregate, ClickHouse engine, exposed columns, query plan
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
@@ -34,6 +35,7 @@ src/cascade/
     ingestion/       commands, queries, DTOs, ConnectorRuntime port, service
     processing/      commands, queries, DTOs, FlinkRuntime port, service
     lakehouse/       commands, queries, DTOs, TransformationRuntime + Orchestrator ports, service
+    serving/         commands, queries, DTOs, ClickHouseRuntime port, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -46,6 +48,7 @@ src/cascade/
     flink/           Flink runtime: in-memory and Flink REST adapters, job config builder
     transform/       transformation runtime: in-memory and dbt Cloud adapters, dbt run builder
     orchestrate/     orchestrator: in-memory and Airflow REST adapters
+    clickhouse/      ClickHouse runtime: in-memory (executes queries) and HTTP adapters, SQL builder
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   sdk/               standalone producer client and record validator (httpx + stdlib only)
@@ -155,6 +158,29 @@ adapter. The application service also keeps lineage coherent: after a successful
 rematerialization it marks lineage-downstream datasets stale, and it exposes upstream and
 downstream lineage through a dedicated query. See `docs/lakehouse.md` for the medallion
 rules, quality semantics, and endpoint list.
+
+## The ServingView aggregate
+
+`ServingView` governs a ClickHouse-backed table that serves curated data to the analytics
+frontend. It references a source dataset from the lakehouse, and it owns a ClickHouse
+engine, an exposed set of columns (each tagged as a dimension, measure, or time column), an
+order-by key, a refresh mode, and a sync lifecycle (registered, syncing, ready, stale,
+failed, retired). One invariant lives in the domain: the aggregating engines
+(SummingMergeTree, AggregatingMergeTree) require at least one measure column, since they
+exist to roll measures up.
+
+The distinctive capability is a constrained analytics query. Rather than accepting raw SQL,
+the aggregate validates a structured request (dimensions, measures with aggregations,
+filters) against its declared columns and roles: a measure cannot be selected as a
+dimension, an unknown column is rejected, and a view can only be queried once it is ready or
+stale. The validated plan is compiled to a neutral query and handed to the `ClickHouseRuntime`
+port. The in-memory adapter executes that query in process (filter, group-by, aggregate)
+over synthetic rows, so the whole query path is exercised by tests without a cluster; the
+HTTP adapter turns the plan into ClickHouse SQL. Staleness against the source is explicit:
+`reconcile` compares the source dataset's last materialization with the view's last sync and
+marks the view stale when the source is newer. A catalog query lists the ready views and
+their columns, which is what the frontend reads to discover what it can query. See
+`docs/serving.md` for the engine rules, the query model, and the endpoint list.
 
 ## Cross-cutting concerns
 

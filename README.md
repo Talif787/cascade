@@ -7,16 +7,18 @@ processing jobs, and serve platform metadata. The compute-heavy data plane (Kafk
 Debezium, Flink, Iceberg) scales horizontally on its own and is layered in over the
 phases described below.
 
-This repository currently contains Phases 1 through 5: the control-plane foundation with
+This repository currently contains Phases 1 through 6: the control-plane foundation with
 a complete vertical slice for the Pipeline aggregate, the Data Contracts bounded context
 with a schema compatibility engine and pluggable schema registry, the Ingestion
 bounded context that manages source connectors (through a Kafka Connect / Debezium runtime
 port), enforces dead-letter policies, and ships a standalone producer SDK, the
 Processing bounded context that manages Flink stream jobs (through a Flink runtime port)
-with exactly-once Iceberg sinks enforced as a domain invariant, and the Lakehouse bounded
+with exactly-once Iceberg sinks enforced as a domain invariant, the Lakehouse bounded
 context that manages medallion Iceberg tables (through dbt and Airflow runtime ports),
 enforcing medallion layering and wiring data-quality results into the materialization
-lifecycle.
+lifecycle, and the Serving bounded context that manages ClickHouse-backed serving views
+(through a ClickHouse runtime port) with a constrained analytics query API validated
+against each view's declared columns.
 
 ## Why a modular monolith
 
@@ -158,6 +160,15 @@ curl "http://localhost:8000/api/v1/pipelines?page=1&size=20&status=draft"
 | POST   | `/api/v1/datasets/{id}/materialize`               | `lakehouse:write`  |
 | PUT    | `/api/v1/datasets/{id}/schedule`                  | `lakehouse:write`  |
 | POST   | `/api/v1/datasets/{id}/deprecate`                 | `lakehouse:write`  |
+| POST   | `/api/v1/serving-views`                           | `serving:write`    |
+| GET    | `/api/v1/serving-views`                           | `serving:read`     |
+| GET    | `/api/v1/serving-views/catalog`                   | `serving:read`     |
+| GET    | `/api/v1/serving-views/{id}`                       | `serving:read`     |
+| POST   | `/api/v1/serving-views/{id}/sync`                 | `serving:write`    |
+| POST   | `/api/v1/serving-views/{id}/reconcile`            | `serving:write`    |
+| PUT    | `/api/v1/serving-views/{id}/schedule`             | `serving:write`    |
+| POST   | `/api/v1/serving-views/{id}/retire`               | `serving:write`    |
+| POST   | `/api/v1/serving-views/{id}/query`                | `serving:read`     |
 | GET    | `/livez`, `/readyz`, `/metrics`                   | none              |
 
 The OpenAPI 3.1 document is served at `/openapi.json`. Errors follow RFC 7807
@@ -187,7 +198,7 @@ in Phase 9.
 3. Ingestion data plane: Debezium, Kafka Connect, producer SDK, dead-letter queues (done).
 4. Stream processing: Flink jobs with exactly-once Iceberg sinks (done).
 5. Lakehouse and transformations: Iceberg medallion tables, dbt, Airflow, data quality (done).
-6. Serving: ClickHouse OLAP, query API, live updates.
+6. Serving: ClickHouse OLAP, query API, live updates (done).
 7. Observability and governance: lineage, freshness SLAs, cost dashboards.
 8. AI-native layer: NL2SQL copilot and a governed data MCP server.
 9. Platform hardening: Kubernetes, Helm, Terraform, GitOps, supply-chain security.
@@ -199,6 +210,7 @@ in Phase 9.
 - `docs/ingestion.md`
 - `docs/processing.md`
 - `docs/lakehouse.md`
+- `docs/serving.md`
 - `docs/configuration.md`
 - `docs/local-development.md`
 - `docs/runbook.md`
