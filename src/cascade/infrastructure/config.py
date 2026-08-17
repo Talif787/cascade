@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     airflow_username: str | None = None
     airflow_password: str | None = None
 
+    clickhouse_url: str | None = None
+    clickhouse_database: str = "default"
+    clickhouse_username: str = "default"
+    clickhouse_password: str = ""
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

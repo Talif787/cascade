@@ -9,6 +9,7 @@ from cascade.domain.ingestion.repository import IngestionSourceRepository
 from cascade.domain.lakehouse.repository import DatasetRepository
 from cascade.domain.pipelines.repository import PipelineRepository
 from cascade.domain.processing.repository import StreamJobRepository
+from cascade.domain.serving.repository import ServingViewRepository
 
 
 class UnitOfWork(ABC):
@@ -19,6 +20,7 @@ class UnitOfWork(ABC):
     ingestion_sources: IngestionSourceRepository
     stream_jobs: StreamJobRepository
     datasets: DatasetRepository
+    serving_views: ServingViewRepository
 
     async def __aenter__(self) -> UnitOfWork:
         return self

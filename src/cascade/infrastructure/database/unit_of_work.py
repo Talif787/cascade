@@ -13,6 +13,9 @@ from cascade.infrastructure.repositories.ingestion_repository import (
     SqlAlchemyIngestionSourceRepository,
 )
 from cascade.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
+from cascade.infrastructure.repositories.serving_view_repository import (
+    SqlAlchemyServingViewRepository,
+)
 from cascade.infrastructure.repositories.stream_job_repository import (
     SqlAlchemyStreamJobRepository,
 )
@@ -30,6 +33,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.ingestion_sources = SqlAlchemyIngestionSourceRepository(self._session)
         self.stream_jobs = SqlAlchemyStreamJobRepository(self._session)
         self.datasets = SqlAlchemyDatasetRepository(self._session)
+        self.serving_views = SqlAlchemyServingViewRepository(self._session)
         return self
 
     async def commit(self) -> None:

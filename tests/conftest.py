@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import pytest
 import pytest_asyncio
@@ -68,7 +68,19 @@ from cascade.domain.processing.repository import (
     StreamJobRepository,
 )
 from cascade.domain.processing.value_objects import JobName, StreamJobId
+from cascade.domain.serving.aggregate import ServingView
+from cascade.domain.serving.repository import (
+    ServingViewQuery,
+    ServingViewRepository,
+    ServingViewSortField,
+)
+from cascade.domain.serving.value_objects import (
+    ServingStatus,
+    ServingViewId,
+    ServingViewName,
+)
 from cascade.infrastructure.cache.base import Cache, IdempotentResponse, RateLimitDecision
+from cascade.infrastructure.clickhouse.in_memory import InMemoryClickHouseRuntime
 from cascade.infrastructure.config import Environment, Settings
 from cascade.infrastructure.security.jwt import Principal, TokenVerifier
 from cascade.presentation.api.app import AppComponents, create_app
@@ -107,6 +119,13 @@ _DATASET_SORT_KEYS = {
     DatasetSortField.STATUS: lambda d: d.status.value,
     DatasetSortField.CREATED_AT: lambda d: d.created_at,
     DatasetSortField.UPDATED_AT: lambda d: d.updated_at,
+}
+
+_SERVING_SORT_KEYS = {
+    ServingViewSortField.NAME: lambda v: str(v.name),
+    ServingViewSortField.STATUS: lambda v: v.status.value,
+    ServingViewSortField.CREATED_AT: lambda v: v.created_at,
+    ServingViewSortField.UPDATED_AT: lambda v: v.updated_at,
 }
 
 
@@ -172,12 +191,14 @@ class InMemoryUnitOfWork(UnitOfWork):
         source_store: dict[uuid.UUID, IngestionSource] | None = None,
         job_store: dict[uuid.UUID, StreamJob] | None = None,
         dataset_store: dict[uuid.UUID, Dataset] | None = None,
+        serving_store: dict[uuid.UUID, ServingView] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
         self._source_store = source_store if source_store is not None else {}
         self._job_store = job_store if job_store is not None else {}
         self._dataset_store = dataset_store if dataset_store is not None else {}
+        self._serving_store = serving_store if serving_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
@@ -185,6 +206,7 @@ class InMemoryUnitOfWork(UnitOfWork):
         self.ingestion_sources = InMemoryIngestionSourceRepository(self._source_store)
         self.stream_jobs = InMemoryStreamJobRepository(self._job_store)
         self.datasets = InMemoryDatasetRepository(self._dataset_store)
+        self.serving_views = InMemoryServingViewRepository(self._serving_store)
         return self
 
     async def commit(self) -> None:
@@ -574,6 +596,78 @@ class FakeOrchestrator(Orchestrator):
         return ScheduleState(dag_id=dag_id, enabled=self.schedules[dag_id])
 
 
+def _clone_serving_view(view: ServingView) -> ServingView:
+    return ServingView(
+        view.id,
+        name=view.name,
+        source_dataset_id=view.source_dataset_id,
+        engine=view.engine,
+        schema=view.schema,
+        refresh_mode=view.refresh_mode,
+        refresh_cron=view.refresh_cron,
+        refresh_enabled=view.refresh_enabled,
+        status=view.status,
+        last_sync_ref=view.last_sync_ref,
+        last_row_count=view.last_row_count,
+        last_synced_at=view.last_synced_at,
+        synced_source_at=view.synced_source_at,
+        description=view.description,
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+        version=view.version,
+    )
+
+
+class InMemoryServingViewRepository(ServingViewRepository):
+    def __init__(self, store: dict[uuid.UUID, ServingView]) -> None:
+        self._store = store
+
+    async def add(self, view: ServingView) -> None:
+        if any(str(v.name) == str(view.name) for v in self._store.values()):
+            raise ConflictError(f"serving view name {view.name!s} is already in use")
+        self._store[view.id.value] = _clone_serving_view(view)
+
+    async def update(self, view: ServingView) -> None:
+        current = self._store.get(view.id.value)
+        if current is None or current.version != view.version:
+            raise ConcurrencyError(f"serving view {view.id!s} was modified concurrently")
+        view._version = view.version + 1
+        self._store[view.id.value] = _clone_serving_view(view)
+
+    async def get(self, view_id: ServingViewId) -> ServingView | None:
+        found = self._store.get(view_id.value)
+        return _clone_serving_view(found) if found is not None else None
+
+    async def get_by_name(self, name: ServingViewName) -> ServingView | None:
+        for view in self._store.values():
+            if str(view.name) == str(name):
+                return _clone_serving_view(view)
+        return None
+
+    async def exists_by_name(self, name: ServingViewName) -> bool:
+        return any(str(v.name) == str(name) for v in self._store.values())
+
+    async def list(self, query: ServingViewQuery) -> tuple[list[ServingView], int]:
+        items = list(self._store.values())
+        if query.status is not None:
+            items = [v for v in items if v.status == query.status]
+        if query.engine is not None:
+            items = [v for v in items if v.engine == query.engine]
+        if query.source_dataset_id is not None:
+            items = [v for v in items if v.source_dataset_id == query.source_dataset_id]
+        items.sort(key=_SERVING_SORT_KEYS[query.sort_by], reverse=query.descending)
+        total = len(items)
+        window = items[query.offset : query.offset + query.limit]
+        return [_clone_serving_view(v) for v in window], total
+
+    async def list_ready(self) -> Sequence[ServingView]:
+        ready = [
+            _clone_serving_view(v) for v in self._store.values() if v.status is ServingStatus.READY
+        ]
+        ready.sort(key=lambda v: str(v.name))
+        return ready
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -611,6 +705,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "processing:write",
                     "lakehouse:read",
                     "lakehouse:write",
+                    "serving:read",
+                    "serving:write",
                 }
             ),
         )
@@ -653,6 +749,11 @@ def dataset_store() -> dict[uuid.UUID, Dataset]:
 
 
 @pytest.fixture
+def serving_store() -> dict[uuid.UUID, ServingView]:
+    return {}
+
+
+@pytest.fixture
 def connector_runtime() -> FakeConnectorRuntime:
     return FakeConnectorRuntime()
 
@@ -673,6 +774,11 @@ def orchestrator() -> FakeOrchestrator:
 
 
 @pytest.fixture
+def clickhouse_runtime() -> InMemoryClickHouseRuntime:
+    return InMemoryClickHouseRuntime()
+
+
+@pytest.fixture
 def cache() -> FakeCache:
     return FakeCache()
 
@@ -684,10 +790,12 @@ def components(
     source_store: dict[uuid.UUID, IngestionSource],
     job_store: dict[uuid.UUID, StreamJob],
     dataset_store: dict[uuid.UUID, Dataset],
+    serving_store: dict[uuid.UUID, ServingView],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
+    clickhouse_runtime: InMemoryClickHouseRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -695,7 +803,7 @@ def components(
 
     return AppComponents(
         uow_factory=lambda: InMemoryUnitOfWork(
-            store, contract_store, source_store, job_store, dataset_store
+            store, contract_store, source_store, job_store, dataset_store, serving_store
         ),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
@@ -704,6 +812,7 @@ def components(
         flink_runtime=flink_runtime,
         transformation_runtime=transformation_runtime,
         orchestrator=orchestrator,
+        clickhouse_runtime=clickhouse_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -734,6 +843,7 @@ class ReadOnlyTokenVerifier(TokenVerifier):
                     "ingestion:read",
                     "processing:read",
                     "lakehouse:read",
+                    "serving:read",
                 }
             ),
         )
@@ -746,10 +856,12 @@ def readonly_components(
     source_store: dict[uuid.UUID, IngestionSource],
     job_store: dict[uuid.UUID, StreamJob],
     dataset_store: dict[uuid.UUID, Dataset],
+    serving_store: dict[uuid.UUID, ServingView],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
+    clickhouse_runtime: InMemoryClickHouseRuntime,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -757,7 +869,7 @@ def readonly_components(
 
     return AppComponents(
         uow_factory=lambda: InMemoryUnitOfWork(
-            store, contract_store, source_store, job_store, dataset_store
+            store, contract_store, source_store, job_store, dataset_store, serving_store
         ),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
@@ -766,6 +878,7 @@ def readonly_components(
         flink_runtime=flink_runtime,
         transformation_runtime=transformation_runtime,
         orchestrator=orchestrator,
+        clickhouse_runtime=clickhouse_runtime,
         health_checks={"database": _ok, "redis": _ok},
     )
 
