@@ -8,6 +8,9 @@ from cascade.application.contracts.registry import SchemaRegistry
 from cascade.application.contracts.service import DataContractApplicationService
 from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.application.ingestion.service import IngestionApplicationService
+from cascade.application.lakehouse.orchestration import Orchestrator
+from cascade.application.lakehouse.service import LakehouseApplicationService
+from cascade.application.lakehouse.transformation import TransformationRuntime
 from cascade.application.pipelines.service import PipelineApplicationService
 from cascade.application.processing.runtime import FlinkRuntime
 from cascade.application.processing.service import StreamProcessingApplicationService
@@ -35,6 +38,14 @@ def get_flink_runtime(request: Request) -> FlinkRuntime:
     return cast(FlinkRuntime, request.app.state.flink_runtime)
 
 
+def get_transformation_runtime(request: Request) -> TransformationRuntime:
+    return cast(TransformationRuntime, request.app.state.transformation_runtime)
+
+
+def get_orchestrator(request: Request) -> Orchestrator:
+    return cast(Orchestrator, request.app.state.orchestrator)
+
+
 def get_pipeline_service(request: Request) -> PipelineApplicationService:
     return PipelineApplicationService(request.app.state.uow_factory)
 
@@ -57,6 +68,14 @@ def get_processing_service(request: Request) -> StreamProcessingApplicationServi
     )
 
 
+def get_lakehouse_service(request: Request) -> LakehouseApplicationService:
+    return LakehouseApplicationService(
+        request.app.state.uow_factory,
+        request.app.state.transformation_runtime,
+        request.app.state.orchestrator,
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 PipelineServiceDep = Annotated[PipelineApplicationService, Depends(get_pipeline_service)]
@@ -65,3 +84,4 @@ IngestionServiceDep = Annotated[IngestionApplicationService, Depends(get_ingesti
 ProcessingServiceDep = Annotated[
     StreamProcessingApplicationService, Depends(get_processing_service)
 ]
+LakehouseServiceDep = Annotated[LakehouseApplicationService, Depends(get_lakehouse_service)]

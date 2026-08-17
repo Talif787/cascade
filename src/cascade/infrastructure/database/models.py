@@ -190,3 +190,58 @@ class StreamJobModel(Base):
         Index("ix_stream_jobs_contract_id", "contract_id"),
         Index("ix_stream_jobs_created_at", "created_at"),
     )
+
+
+_DATASET_STATUS_VALUES = (
+    "registered",
+    "materializing",
+    "materialized",
+    "stale",
+    "failed",
+    "deprecated",
+)
+
+_LAYER_VALUES = ("bronze", "silver", "gold")
+_QUALITY_STATUS_VALUES = ("unknown", "passed", "failed")
+
+
+class DatasetModel(Base):
+    __tablename__ = "datasets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(127), nullable=False, unique=True)
+    layer: Mapped[str] = mapped_column(String(16), nullable=False)
+    transformation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    upstreams: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    schedule: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    quality_checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    contract_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("data_contracts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    quality_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_run_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_materialized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_quality_outcomes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"layer IN {_LAYER_VALUES}", name="ck_datasets_layer"),
+        CheckConstraint(f"status IN {_DATASET_STATUS_VALUES}", name="ck_datasets_status"),
+        CheckConstraint(
+            f"quality_status IN {_QUALITY_STATUS_VALUES}", name="ck_datasets_quality_status"
+        ),
+        Index("ix_datasets_layer", "layer"),
+        Index("ix_datasets_status", "status"),
+        Index("ix_datasets_contract_id", "contract_id"),
+        Index("ix_datasets_created_at", "created_at"),
+        Index("ix_datasets_upstreams", "upstreams", postgresql_using="gin"),
+    )

@@ -22,13 +22,22 @@ from cascade.application.processing.commands import (
     EndpointInput,
 )
 from cascade.application.processing.service import StreamProcessingApplicationService
+from cascade.application.lakehouse.commands import (
+    QualityCheckInput,
+    RegisterDatasetCommand,
+    ScheduleInput,
+    TransformationInput,
+)
+from cascade.application.lakehouse.service import LakehouseApplicationService
 from cascade.infrastructure.config import get_settings
 from cascade.infrastructure.connect.factory import build_connector_runtime
 from cascade.infrastructure.database.engine import create_engine, create_session_factory
 from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from cascade.infrastructure.flink.factory import build_flink_runtime
 from cascade.infrastructure.logging import configure_logging
+from cascade.infrastructure.orchestrate.factory import build_orchestrator
 from cascade.infrastructure.registry.factory import build_schema_registry
+from cascade.infrastructure.transform.factory import build_transformation_runtime
 
 _logger = structlog.get_logger("cascade.seed")
 
@@ -80,6 +89,11 @@ async def _seed() -> None:
     )
     processing_service = StreamProcessingApplicationService(
         lambda: SqlAlchemyUnitOfWork(session_factory), build_flink_runtime(settings)
+    )
+    lakehouse_service = LakehouseApplicationService(
+        lambda: SqlAlchemyUnitOfWork(session_factory),
+        build_transformation_runtime(settings),
+        build_orchestrator(settings),
     )
     try:
         for command in _SEEDS:
@@ -140,6 +154,41 @@ async def _seed() -> None:
                 _logger.info("seed_job_created", name=job_view.name, id=job_view.id)
             except ConflictError:
                 _logger.info("seed_job_skipped", name="orders-enrichment")
+
+            try:
+                bronze = await lakehouse_service.register_dataset(
+                    RegisterDatasetCommand(
+                        name="bronze.orders",
+                        layer="bronze",
+                        transformation=TransformationInput(
+                            engine="dbt", identifier="bronze_orders", materialization="incremental"
+                        ),
+                        schedule=ScheduleInput(cron="0 * * * *", enabled=True),
+                        description="Raw orders landed from the change stream.",
+                    )
+                )
+                _logger.info("seed_dataset_created", name=bronze.name, id=bronze.id)
+                silver = await lakehouse_service.register_dataset(
+                    RegisterDatasetCommand(
+                        name="silver.orders_enriched",
+                        layer="silver",
+                        transformation=TransformationInput(
+                            engine="dbt", identifier="silver_orders_enriched"
+                        ),
+                        schedule=ScheduleInput(cron="0 2 * * *", enabled=True),
+                        upstream_ids=(bronze.id,),
+                        quality_checks=(
+                            QualityCheckInput(kind="not_null", column="order_id"),
+                            QualityCheckInput(kind="unique", column="order_id"),
+                            QualityCheckInput(kind="row_count_min", threshold=1),
+                        ),
+                        contract_id=orders_contract_id,
+                        description="Cleaned and enriched orders for analytics.",
+                    )
+                )
+                _logger.info("seed_dataset_created", name=silver.name, id=silver.id)
+            except ConflictError:
+                _logger.info("seed_dataset_skipped", name="bronze.orders")
     finally:
         await engine.dispose()
 

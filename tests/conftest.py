@@ -15,6 +15,13 @@ from cascade.application.ingestion.runtime import (
     ConnectorRuntime,
     ConnectorSpec,
 )
+from cascade.application.lakehouse.orchestration import Orchestrator, ScheduleState
+from cascade.application.lakehouse.transformation import (
+    QualityOutcomeDTO,
+    TransformationResult,
+    TransformationRuntime,
+    TransformationSpec,
+)
 from cascade.application.processing.runtime import (
     FlinkRuntime,
     JobHandle,
@@ -40,6 +47,13 @@ from cascade.domain.ingestion.repository import (
     SourceSortField,
 )
 from cascade.domain.ingestion.value_objects import IngestionSourceId, SourceName
+from cascade.domain.lakehouse.aggregate import Dataset
+from cascade.domain.lakehouse.repository import (
+    DatasetQuery,
+    DatasetRepository,
+    DatasetSortField,
+)
+from cascade.domain.lakehouse.value_objects import DatasetId, DatasetName
 from cascade.domain.pipelines.aggregate import Pipeline
 from cascade.domain.pipelines.repository import (
     PipelineQuery,
@@ -85,6 +99,14 @@ _JOB_SORT_KEYS = {
     JobSortField.STATUS: lambda j: j.status.value,
     JobSortField.CREATED_AT: lambda j: j.created_at,
     JobSortField.UPDATED_AT: lambda j: j.updated_at,
+}
+
+_DATASET_SORT_KEYS = {
+    DatasetSortField.NAME: lambda d: str(d.name),
+    DatasetSortField.LAYER: lambda d: d.layer.value,
+    DatasetSortField.STATUS: lambda d: d.status.value,
+    DatasetSortField.CREATED_AT: lambda d: d.created_at,
+    DatasetSortField.UPDATED_AT: lambda d: d.updated_at,
 }
 
 
@@ -149,17 +171,20 @@ class InMemoryUnitOfWork(UnitOfWork):
         contract_store: dict[uuid.UUID, DataContract],
         source_store: dict[uuid.UUID, IngestionSource] | None = None,
         job_store: dict[uuid.UUID, StreamJob] | None = None,
+        dataset_store: dict[uuid.UUID, Dataset] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
         self._source_store = source_store if source_store is not None else {}
         self._job_store = job_store if job_store is not None else {}
+        self._dataset_store = dataset_store if dataset_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
         self.contracts = InMemoryDataContractRepository(self._contract_store)
         self.ingestion_sources = InMemoryIngestionSourceRepository(self._source_store)
         self.stream_jobs = InMemoryStreamJobRepository(self._job_store)
+        self.datasets = InMemoryDatasetRepository(self._dataset_store)
         return self
 
     async def commit(self) -> None:
@@ -437,6 +462,118 @@ class FakeFlinkRuntime(FlinkRuntime):
         return JobHandle(job_id=job_id, state=state) if state is not None else None
 
 
+def _clone_dataset(dataset: Dataset) -> Dataset:
+    return Dataset(
+        dataset.id,
+        name=dataset.name,
+        layer=dataset.layer,
+        transformation=dataset.transformation,
+        upstreams=dataset.upstreams,
+        schedule=dataset.schedule,
+        quality_checks=dataset.quality_checks,
+        contract_id=dataset.contract_id,
+        status=dataset.status,
+        quality_status=dataset.quality_status,
+        last_run_ref=dataset.last_run_ref,
+        last_row_count=dataset.last_row_count,
+        last_materialized_at=dataset.last_materialized_at,
+        last_quality_outcomes=dataset.last_quality_outcomes,
+        description=dataset.description,
+        created_at=dataset.created_at,
+        updated_at=dataset.updated_at,
+        version=dataset.version,
+    )
+
+
+class InMemoryDatasetRepository(DatasetRepository):
+    def __init__(self, store: dict[uuid.UUID, Dataset]) -> None:
+        self._store = store
+
+    async def add(self, dataset: Dataset) -> None:
+        if any(str(d.name) == str(dataset.name) for d in self._store.values()):
+            raise ConflictError(f"dataset name {dataset.name!s} is already in use")
+        self._store[dataset.id.value] = _clone_dataset(dataset)
+
+    async def update(self, dataset: Dataset) -> None:
+        current = self._store.get(dataset.id.value)
+        if current is None or current.version != dataset.version:
+            raise ConcurrencyError(f"dataset {dataset.id!s} was modified concurrently")
+        dataset._version = dataset.version + 1
+        self._store[dataset.id.value] = _clone_dataset(dataset)
+
+    async def get(self, dataset_id: DatasetId) -> Dataset | None:
+        found = self._store.get(dataset_id.value)
+        return _clone_dataset(found) if found is not None else None
+
+    async def get_by_name(self, name: DatasetName) -> Dataset | None:
+        for dataset in self._store.values():
+            if str(dataset.name) == str(name):
+                return _clone_dataset(dataset)
+        return None
+
+    async def exists_by_name(self, name: DatasetName) -> bool:
+        return any(str(d.name) == str(name) for d in self._store.values())
+
+    async def list(self, query: DatasetQuery) -> tuple[list[Dataset], int]:
+        items = list(self._store.values())
+        if query.layer is not None:
+            items = [d for d in items if d.layer == query.layer]
+        if query.status is not None:
+            items = [d for d in items if d.status == query.status]
+        if query.quality_status is not None:
+            items = [d for d in items if d.quality_status == query.quality_status]
+        if query.contract_id is not None:
+            items = [d for d in items if d.contract_id == query.contract_id]
+        items.sort(key=_DATASET_SORT_KEYS[query.sort_by], reverse=query.descending)
+        total = len(items)
+        window = items[query.offset : query.offset + query.limit]
+        return [_clone_dataset(d) for d in window], total
+
+    async def list_dependents(self, dataset_id: DatasetId) -> list[Dataset]:
+        return [_clone_dataset(d) for d in self._store.values() if d.depends_on(dataset_id)]
+
+
+class FakeTransformationRuntime(TransformationRuntime):
+    def __init__(self, fail: bool = False, row_count: int = 1000) -> None:
+        self.fail = fail
+        self.row_count = row_count
+
+    async def run(self, spec: TransformationSpec) -> TransformationResult:
+        if self.fail:
+            from cascade.application.lakehouse.transformation import (
+                TransformationRuntimeError,
+            )
+
+            raise TransformationRuntimeError("run rejected")
+        outcomes = tuple(
+            QualityOutcomeDTO(name=check.name, passed=check.column != "force_fail")
+            for check in spec.quality_checks
+        )
+        return TransformationResult(
+            run_ref="dbt-run-test", row_count=self.row_count, quality=outcomes
+        )
+
+
+class FakeOrchestrator(Orchestrator):
+    def __init__(self) -> None:
+        self.schedules: dict[str, bool] = {}
+
+    async def upsert_schedule(self, dag_id: str, cron: str, timezone: str, enabled: bool) -> None:
+        self.schedules[dag_id] = enabled
+
+    async def trigger(self, dag_id: str) -> str:
+        return "manual__test"
+
+    async def pause(self, dag_id: str) -> None:
+        if dag_id in self.schedules:
+            self.schedules[dag_id] = False
+
+    async def status(self, dag_id: str) -> ScheduleState | None:
+        if dag_id not in self.schedules:
+            return None
+        return ScheduleState(dag_id=dag_id, enabled=self.schedules[dag_id])
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -472,6 +609,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "ingestion:write",
                     "processing:read",
                     "processing:write",
+                    "lakehouse:read",
+                    "lakehouse:write",
                 }
             ),
         )
@@ -509,6 +648,11 @@ def job_store() -> dict[uuid.UUID, StreamJob]:
 
 
 @pytest.fixture
+def dataset_store() -> dict[uuid.UUID, Dataset]:
+    return {}
+
+
+@pytest.fixture
 def connector_runtime() -> FakeConnectorRuntime:
     return FakeConnectorRuntime()
 
@@ -516,6 +660,16 @@ def connector_runtime() -> FakeConnectorRuntime:
 @pytest.fixture
 def flink_runtime() -> FakeFlinkRuntime:
     return FakeFlinkRuntime()
+
+
+@pytest.fixture
+def transformation_runtime() -> FakeTransformationRuntime:
+    return FakeTransformationRuntime()
+
+
+@pytest.fixture
+def orchestrator() -> FakeOrchestrator:
+    return FakeOrchestrator()
 
 
 @pytest.fixture
@@ -529,20 +683,27 @@ def components(
     contract_store: dict[uuid.UUID, DataContract],
     source_store: dict[uuid.UUID, IngestionSource],
     job_store: dict[uuid.UUID, StreamJob],
+    dataset_store: dict[uuid.UUID, Dataset],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
+    transformation_runtime: FakeTransformationRuntime,
+    orchestrator: FakeOrchestrator,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store, job_store),
+        uow_factory=lambda: InMemoryUnitOfWork(
+            store, contract_store, source_store, job_store, dataset_store
+        ),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
         connector_runtime=connector_runtime,
         flink_runtime=flink_runtime,
+        transformation_runtime=transformation_runtime,
+        orchestrator=orchestrator,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -572,6 +733,7 @@ class ReadOnlyTokenVerifier(TokenVerifier):
                     "contracts:read",
                     "ingestion:read",
                     "processing:read",
+                    "lakehouse:read",
                 }
             ),
         )
@@ -583,20 +745,27 @@ def readonly_components(
     contract_store: dict[uuid.UUID, DataContract],
     source_store: dict[uuid.UUID, IngestionSource],
     job_store: dict[uuid.UUID, StreamJob],
+    dataset_store: dict[uuid.UUID, Dataset],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
+    transformation_runtime: FakeTransformationRuntime,
+    orchestrator: FakeOrchestrator,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
         return True
 
     return AppComponents(
-        uow_factory=lambda: InMemoryUnitOfWork(store, contract_store, source_store, job_store),
+        uow_factory=lambda: InMemoryUnitOfWork(
+            store, contract_store, source_store, job_store, dataset_store
+        ),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
         schema_registry=FakeSchemaRegistry(),
         connector_runtime=connector_runtime,
         flink_runtime=flink_runtime,
+        transformation_runtime=transformation_runtime,
+        orchestrator=orchestrator,
         health_checks={"database": _ok, "redis": _ok},
     )
 

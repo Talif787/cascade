@@ -26,12 +26,14 @@ src/cascade/
     contracts/       DataContract aggregate, schema value objects, compatibility engine
     ingestion/       IngestionSource aggregate, connector value objects, dead-letter policy
     processing/      StreamJob aggregate, checkpoint config, source/sink value objects
+    lakehouse/       Dataset aggregate, medallion layers, transformation, schedule, quality
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
     contracts/       commands, queries, DTOs, SchemaRegistry port, service
     ingestion/       commands, queries, DTOs, ConnectorRuntime port, service
     processing/      commands, queries, DTOs, FlinkRuntime port, service
+    lakehouse/       commands, queries, DTOs, TransformationRuntime + Orchestrator ports, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -42,6 +44,8 @@ src/cascade/
     registry/        schema serialization and in-memory / Confluent adapters
     connect/         connector runtime: in-memory and Kafka Connect adapters
     flink/           Flink runtime: in-memory and Flink REST adapters, job config builder
+    transform/       transformation runtime: in-memory and dbt Cloud adapters, dbt run builder
+    orchestrate/     orchestrator: in-memory and Airflow REST adapters
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   sdk/               standalone producer client and record validator (httpx + stdlib only)
@@ -131,6 +135,26 @@ returned savepoint path is stored so resume can restart the job from exactly tha
 which is how exactly-once survives an operator-driven restart. Submission is a two-step
 orchestration so stored state follows what the cluster actually did. See
 `docs/processing.md` for the state machine, exactly-once rules, and endpoint list.
+
+## The Dataset aggregate
+
+`Dataset` governs a medallion Iceberg table. It owns a materialization lifecycle
+(registered, materializing, materialized, stale, failed, deprecated), a dbt transformation,
+an Airflow schedule, a set of data-quality checks, and its upstream dataset dependencies.
+The defining invariant, enforced in the domain at registration, is the medallion rule: a
+dataset may depend only on datasets in the same or a lower layer (bronze, then silver, then
+gold), never a higher one, and never on itself. Data quality is wired into the lifecycle:
+when a materialization completes, the quality outcomes are evaluated, and any failure moves
+the dataset to failed rather than materialized.
+
+Two external systems sit behind ports, following the established pattern. The
+`TransformationRuntime` (dbt) materializes a dataset and returns a row count plus quality
+outcomes; it has an in-memory default and a dbt Cloud adapter. The `Orchestrator` (Airflow)
+manages schedules and triggers runs; it has an in-memory default and an Airflow REST
+adapter. The application service also keeps lineage coherent: after a successful
+rematerialization it marks lineage-downstream datasets stale, and it exposes upstream and
+downstream lineage through a dedicated query. See `docs/lakehouse.md` for the medallion
+rules, quality semantics, and endpoint list.
 
 ## Cross-cutting concerns
 
