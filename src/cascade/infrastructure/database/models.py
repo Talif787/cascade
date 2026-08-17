@@ -97,3 +97,48 @@ class SchemaVersionModel(Base):
         CheckConstraint(f"status IN {_VERSION_STATUS_VALUES}", name="ck_schema_versions_status"),
         Index("ix_schema_versions_contract_id", "contract_id"),
     )
+
+
+_SOURCE_STATUS_VALUES = (
+    "registered",
+    "provisioning",
+    "running",
+    "paused",
+    "failed",
+    "decommissioned",
+)
+
+
+class IngestionSourceModel(Base):
+    __tablename__ = "ingestion_sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(63), nullable=False, unique=True)
+    connector_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    contract_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("data_contracts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    pipeline_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pipelines.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    dead_letter_policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    dead_letter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runtime_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {_SOURCE_STATUS_VALUES}", name="ck_ingestion_sources_status"),
+        Index("ix_ingestion_sources_status", "status"),
+        Index("ix_ingestion_sources_connector_kind", "connector_kind"),
+        Index("ix_ingestion_sources_contract_id", "contract_id"),
+        Index("ix_ingestion_sources_created_at", "created_at"),
+    )

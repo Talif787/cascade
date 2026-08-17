@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from cascade.application.common.unit_of_work import UnitOfWorkFactory
 from cascade.application.contracts.registry import SchemaRegistry
+from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.infrastructure.cache.base import Cache
 from cascade.infrastructure.config import Settings
 from cascade.infrastructure.logging import configure_logging
@@ -22,7 +23,7 @@ from cascade.presentation.api.errors import register_exception_handlers
 from cascade.presentation.api.middleware.correlation import CorrelationIdMiddleware
 from cascade.presentation.api.middleware.logging import AccessLogMiddleware
 from cascade.presentation.api.middleware.rate_limit import RateLimitMiddleware
-from cascade.presentation.api.routers import contracts, health, pipelines
+from cascade.presentation.api.routers import contracts, health, ingestion, pipelines
 
 HealthCheck = Callable[[], Awaitable[bool]]
 
@@ -35,6 +36,7 @@ class AppComponents:
     cache: Cache
     token_verifier: TokenVerifier
     schema_registry: SchemaRegistry
+    connector_runtime: ConnectorRuntime
     health_checks: dict[str, HealthCheck] = field(default_factory=dict)
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -52,6 +54,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
         app.state.cache = resolved.cache
         app.state.token_verifier = resolved.token_verifier
         app.state.schema_registry = resolved.schema_registry
+        app.state.connector_runtime = resolved.connector_runtime
         app.state.health_checks = resolved.health_checks
         instrument_app(app, resolved.engine, settings)
         _logger.info("application_started", environment=settings.environment.value)
@@ -87,6 +90,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
     app.include_router(health.router)
     app.include_router(pipelines.router)
     app.include_router(contracts.router)
+    app.include_router(ingestion.router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
@@ -100,6 +104,7 @@ def _build_components(settings: Settings) -> AppComponents:
     from redis.asyncio import Redis
 
     from cascade.infrastructure.cache.redis_cache import RedisCache
+    from cascade.infrastructure.connect.factory import build_connector_runtime
     from cascade.infrastructure.database.engine import create_engine, create_session_factory
     from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
     from cascade.infrastructure.registry.factory import build_schema_registry
@@ -123,6 +128,7 @@ def _build_components(settings: Settings) -> AppComponents:
         cache=cache,
         token_verifier=build_verifier(settings),
         schema_registry=build_schema_registry(settings),
+        connector_runtime=build_connector_runtime(settings),
         health_checks={"database": _check_database, "redis": _check_redis},
         engine=engine,
         redis=redis,
