@@ -291,11 +291,14 @@ def components(
 async def client(settings: Settings, components: AppComponents) -> AsyncIterator[AsyncClient]:
     app = create_app(settings, components)
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app), AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-        headers={"Authorization": "Bearer test-token"},
-    ) as http_client:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer test-token"},
+        ) as http_client,
+    ):
         yield http_client
 
 
@@ -331,9 +334,12 @@ async def readonly_client(
 ) -> AsyncIterator[AsyncClient]:
     app = create_app(settings, readonly_components)
     transport = ASGITransport(app=app)
-    async with app.router.lifespan_context(app), AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-        headers={"Authorization": "Bearer test-token"},
-    ) as http_client:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer test-token"},
+        ) as http_client,
+    ):
         yield http_client
