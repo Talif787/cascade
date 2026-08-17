@@ -11,6 +11,7 @@ from cascade.application.common.errors import (
     InputValidationError,
     NotFoundError,
     PermissionDeniedError,
+    SchemaIncompatibleError,
 )
 from cascade.domain.common.errors import DomainError
 from cascade.infrastructure.security.jwt import AuthenticationError
@@ -55,6 +56,23 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AuthenticationError)
     async def _auth(request: Request, exc: AuthenticationError) -> JSONResponse:
         return _problem(401, "Unauthorized", str(exc), request)
+
+    @app.exception_handler(SchemaIncompatibleError)
+    async def _schema_incompatible(request: Request, exc: SchemaIncompatibleError) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            media_type=_PROBLEM_MEDIA_TYPE,
+            content={
+                "type": "about:blank",
+                "title": "Conflict",
+                "status": 409,
+                "detail": str(exc),
+                "instance": request.url.path,
+                "correlation_id": get_correlation_id() or None,
+                "compatibility_mode": exc.mode,
+                "violations": exc.violations,
+            },
+        )
 
     @app.exception_handler(PermissionDeniedError)
     async def _forbidden(request: Request, exc: PermissionDeniedError) -> JSONResponse:

@@ -26,3 +26,10 @@ class ConcurrencyError(ApplicationError):
 
 class PermissionDeniedError(ApplicationError):
     """Raised when a principal lacks a required scope."""
+
+
+class SchemaIncompatibleError(ApplicationError):
+    def __init__(self, mode: str, violations: list[str]) -> None:
+        super().__init__(f"schema is not {mode} compatible")
+        self.mode = mode
+        self.violations = violations

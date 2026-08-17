@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from cascade.application.common.unit_of_work import UnitOfWorkFactory
+from cascade.application.contracts.registry import SchemaRegistry
 from cascade.infrastructure.cache.base import Cache
 from cascade.infrastructure.config import Settings
 from cascade.infrastructure.logging import configure_logging
@@ -21,7 +22,7 @@ from cascade.presentation.api.errors import register_exception_handlers
 from cascade.presentation.api.middleware.correlation import CorrelationIdMiddleware
 from cascade.presentation.api.middleware.logging import AccessLogMiddleware
 from cascade.presentation.api.middleware.rate_limit import RateLimitMiddleware
-from cascade.presentation.api.routers import health, pipelines
+from cascade.presentation.api.routers import contracts, health, pipelines
 
 HealthCheck = Callable[[], Awaitable[bool]]
 
@@ -33,6 +34,7 @@ class AppComponents:
     uow_factory: UnitOfWorkFactory
     cache: Cache
     token_verifier: TokenVerifier
+    schema_registry: SchemaRegistry
     health_checks: dict[str, HealthCheck] = field(default_factory=dict)
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -49,6 +51,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
         app.state.uow_factory = resolved.uow_factory
         app.state.cache = resolved.cache
         app.state.token_verifier = resolved.token_verifier
+        app.state.schema_registry = resolved.schema_registry
         app.state.health_checks = resolved.health_checks
         instrument_app(app, resolved.engine, settings)
         _logger.info("application_started", environment=settings.environment.value)
@@ -83,6 +86,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
 
     app.include_router(health.router)
     app.include_router(pipelines.router)
+    app.include_router(contracts.router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
@@ -98,6 +102,7 @@ def _build_components(settings: Settings) -> AppComponents:
     from cascade.infrastructure.cache.redis_cache import RedisCache
     from cascade.infrastructure.database.engine import create_engine, create_session_factory
     from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
+    from cascade.infrastructure.registry.factory import build_schema_registry
     from cascade.infrastructure.security.jwt import build_verifier
 
     engine = create_engine(settings)
@@ -117,6 +122,7 @@ def _build_components(settings: Settings) -> AppComponents:
         uow_factory=lambda: SqlAlchemyUnitOfWork(session_factory),
         cache=cache,
         token_verifier=build_verifier(settings),
+        schema_registry=build_schema_registry(settings),
         health_checks={"database": _check_database, "redis": _check_redis},
         engine=engine,
         redis=redis,

@@ -23,9 +23,11 @@ src/cascade/
   domain/
     common/          Entity, AggregateRoot, DomainEvent, base errors
     pipelines/       Pipeline aggregate, value objects, events, repository port
+    contracts/       DataContract aggregate, schema value objects, compatibility engine
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
+    contracts/       commands, queries, DTOs, SchemaRegistry port, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -33,6 +35,7 @@ src/cascade/
     metrics.py       Prometheus registry and metrics
     database/        engine, ORM models, mappers, SQLAlchemy unit of work
     repositories/    SQLAlchemy repository implementations
+    registry/        schema serialization and in-memory / Confluent adapters
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   presentation/api/
@@ -42,7 +45,7 @@ src/cascade/
     errors.py        RFC 7807 exception handlers
     middleware/      correlation id, access log and metrics, rate limiting
     schemas/         pydantic request and response models
-    routers/         health and pipeline endpoints
+    routers/         health, pipeline, and contract endpoints
 ```
 
 ## The Pipeline aggregate
@@ -60,7 +63,28 @@ draft ---activate--> active ---pause--> paused
 Invalid transitions raise `InvalidStateTransition`. Every successful transition records
 a `PipelineStatusChanged` domain event; registration records `PipelineRegistered`.
 Events are pulled and logged by the application service after commit. A durable outbox
-and event bus are introduced in Phase 2.
+and event bus arrive in a later phase.
+
+## The DataContract aggregate
+
+`DataContract` governs the schema of a dataset. It owns an ordered list of `SchemaVersion`
+entities and enforces a single invariant on every publish: the candidate schema must be
+compatible with the latest published version under the contract's compatibility mode. That
+rule lives in `domain/contracts/compatibility.py` as a pure function over two schema
+definitions, so it is deterministic and unit-testable without any infrastructure.
+
+Compatibility is expressed as a reader schema reading data written with a writer schema.
+Backward compatibility checks that the new schema (reader) can read old data (writer);
+forward flips the roles; full requires both. The direction is the subtle part: getting
+reader and writer the wrong way round silently swaps backward and forward, so the two
+directions are covered explicitly by the unit tests.
+
+Publishing a version is orchestrated by the application service, not the domain: the
+aggregate validates and appends the version, then the service registers the schema through
+the `SchemaRegistry` port and stores the returned id on the version. The port has an
+in-memory adapter (the default, so nothing external is required) and a Confluent-compatible
+HTTP adapter selected when `CASCADE_SCHEMA_REGISTRY_URL` is set. See
+`docs/data-contracts.md` for the full compatibility matrix and endpoint list.
 
 ## Cross-cutting concerns
 
