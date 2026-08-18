@@ -6,6 +6,8 @@ from fastapi import Depends, Request
 
 from cascade.application.contracts.registry import SchemaRegistry
 from cascade.application.contracts.service import DataContractApplicationService
+from cascade.application.governance.cost_source import CostSource
+from cascade.application.governance.service import GovernanceApplicationService
 from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.application.ingestion.service import IngestionApplicationService
 from cascade.application.lakehouse.orchestration import Orchestrator
@@ -52,6 +54,10 @@ def get_clickhouse_runtime(request: Request) -> ClickHouseRuntime:
     return cast(ClickHouseRuntime, request.app.state.clickhouse_runtime)
 
 
+def get_cost_source(request: Request) -> CostSource:
+    return cast(CostSource, request.app.state.cost_source)
+
+
 def get_pipeline_service(request: Request) -> PipelineApplicationService:
     return PipelineApplicationService(request.app.state.uow_factory)
 
@@ -88,6 +94,12 @@ def get_serving_service(request: Request) -> ServingApplicationService:
     )
 
 
+def get_governance_service(request: Request) -> GovernanceApplicationService:
+    return GovernanceApplicationService(
+        request.app.state.uow_factory, request.app.state.cost_source
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 PipelineServiceDep = Annotated[PipelineApplicationService, Depends(get_pipeline_service)]
@@ -98,3 +110,4 @@ ProcessingServiceDep = Annotated[
 ]
 LakehouseServiceDep = Annotated[LakehouseApplicationService, Depends(get_lakehouse_service)]
 ServingServiceDep = Annotated[ServingApplicationService, Depends(get_serving_service)]
+GovernanceServiceDep = Annotated[GovernanceApplicationService, Depends(get_governance_service)]

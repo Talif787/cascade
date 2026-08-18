@@ -28,6 +28,7 @@ src/cascade/
     processing/      StreamJob aggregate, checkpoint config, source/sink value objects
     lakehouse/       Dataset aggregate, medallion layers, transformation, schedule, quality
     serving/         ServingView aggregate, ClickHouse engine, exposed columns, query plan
+    governance/      ServiceLevelObjective and CostEntry aggregates, asset refs, compliance
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
@@ -36,6 +37,7 @@ src/cascade/
     processing/      commands, queries, DTOs, FlinkRuntime port, service
     lakehouse/       commands, queries, DTOs, TransformationRuntime + Orchestrator ports, service
     serving/         commands, queries, DTOs, ClickHouseRuntime port, service
+    governance/      commands, queries, DTOs, CostSource port, lineage read model, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -49,6 +51,7 @@ src/cascade/
     transform/       transformation runtime: in-memory and dbt Cloud adapters, dbt run builder
     orchestrate/     orchestrator: in-memory and Airflow REST adapters
     clickhouse/      ClickHouse runtime: in-memory (executes queries) and HTTP adapters, SQL builder
+    cost/            cost source: in-memory (synthetic) and HTTP billing adapters
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   sdk/               standalone producer client and record validator (httpx + stdlib only)
@@ -181,6 +184,29 @@ HTTP adapter turns the plan into ClickHouse SQL. Staleness against the source is
 marks the view stale when the source is newer. A catalog query lists the ready views and
 their columns, which is what the frontend reads to discover what it can query. See
 `docs/serving.md` for the engine rules, the query model, and the endpoint list.
+
+## The governance layer
+
+The governance context layers observability over the assets the other contexts produce. It
+holds two aggregates and one read model. The `ServiceLevelObjective` aggregate binds a
+freshness target to a refreshable asset (a dataset or serving view, enforced as a domain
+invariant) and evaluates compliance against the asset's last refresh: meeting, at risk (past
+eighty percent of the target), or breached, incrementing a breach count only on a fresh
+breach. Evaluation is a domain method fed the asset's last refresh time, which the service
+reads from the dataset's last materialization or the serving view's last sync. The
+`CostEntry` aggregate is an immutable record of cost attributed to an asset and category over
+a period; entries are recorded directly or imported through the `CostSource` port (in-memory
+synthetic by default, an HTTP billing adapter when configured), and the repository rolls them
+up by category and by asset into a cost report through SQL aggregation. Lineage is a read
+model with no table of its own: it walks the dataset upstream references, dataset dependents,
+and serving-view sources already present in the other contexts to assemble a node and edge
+graph rooted at any asset.
+
+Cross-context references here are polymorphic `(kind, id)` pairs rather than foreign keys,
+since a governed asset can live in any of several tables. The service validates that a
+referenced asset exists by dispatching to the right repository for its kind, so integrity is
+enforced in the application layer rather than the schema. See `docs/governance.md` for the
+compliance model, the cost flow, and the endpoint list.
 
 ## Cross-cutting concerns
 

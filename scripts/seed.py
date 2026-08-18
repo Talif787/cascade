@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import structlog
 
@@ -34,9 +35,12 @@ from cascade.application.serving.commands import (
     RegisterServingViewCommand,
 )
 from cascade.application.serving.service import ServingApplicationService
+from cascade.application.governance.commands import RecordCostCommand, RegisterSloCommand
+from cascade.application.governance.service import GovernanceApplicationService
 from cascade.infrastructure.clickhouse.factory import build_clickhouse_runtime
 from cascade.infrastructure.config import get_settings
 from cascade.infrastructure.connect.factory import build_connector_runtime
+from cascade.infrastructure.cost.factory import build_cost_source
 from cascade.infrastructure.database.engine import create_engine, create_session_factory
 from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
 from cascade.infrastructure.flink.factory import build_flink_runtime
@@ -103,6 +107,9 @@ async def _seed() -> None:
     )
     serving_service = ServingApplicationService(
         lambda: SqlAlchemyUnitOfWork(session_factory), build_clickhouse_runtime(settings)
+    )
+    governance_service = GovernanceApplicationService(
+        lambda: SqlAlchemyUnitOfWork(session_factory), build_cost_source(settings)
     )
     try:
         for command in _SEEDS:
@@ -230,6 +237,35 @@ async def _seed() -> None:
                     )
                 )
                 _logger.info("seed_serving_view_created", name=view.name, id=view.id)
+
+                slo = await governance_service.register_slo(
+                    RegisterSloCommand(
+                        name="gold-orders-daily-freshness",
+                        asset_kind="dataset",
+                        asset_id=gold.id,
+                        max_staleness_minutes=1440,
+                        severity="high",
+                        owner="data-platform",
+                        description="Gold orders must refresh at least daily.",
+                    )
+                )
+                _logger.info("seed_slo_created", name=slo.name, id=slo.id)
+
+                now = datetime.now(timezone.utc)
+                day_ago = now - timedelta(days=1)
+                for category, amount in (("compute", 4200), ("storage", 1800)):
+                    entry = await governance_service.record_cost(
+                        RecordCostCommand(
+                            asset_kind="dataset",
+                            asset_id=gold.id,
+                            category=category,
+                            amount_cents=amount,
+                            period_start=day_ago,
+                            period_end=now,
+                            source="seed",
+                        )
+                    )
+                    _logger.info("seed_cost_created", id=entry.id, category=category)
             except ConflictError:
                 _logger.info("seed_dataset_skipped", name="bronze.orders")
     finally:

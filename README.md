@@ -7,7 +7,7 @@ processing jobs, and serve platform metadata. The compute-heavy data plane (Kafk
 Debezium, Flink, Iceberg) scales horizontally on its own and is layered in over the
 phases described below.
 
-This repository currently contains Phases 1 through 6: the control-plane foundation with
+This repository currently contains Phases 1 through 7: the control-plane foundation with
 a complete vertical slice for the Pipeline aggregate, the Data Contracts bounded context
 with a schema compatibility engine and pluggable schema registry, the Ingestion
 bounded context that manages source connectors (through a Kafka Connect / Debezium runtime
@@ -16,9 +16,12 @@ Processing bounded context that manages Flink stream jobs (through a Flink runti
 with exactly-once Iceberg sinks enforced as a domain invariant, the Lakehouse bounded
 context that manages medallion Iceberg tables (through dbt and Airflow runtime ports),
 enforcing medallion layering and wiring data-quality results into the materialization
-lifecycle, and the Serving bounded context that manages ClickHouse-backed serving views
+lifecycle, the Serving bounded context that manages ClickHouse-backed serving views
 (through a ClickHouse runtime port) with a constrained analytics query API validated
-against each view's declared columns.
+against each view's declared columns, and the Governance bounded context that layers
+observability over every asset: freshness SLOs that evaluate compliance against an asset's
+last refresh, cost accounting imported through a cost-source port and rolled up into a
+report, and an end-to-end lineage graph assembled from dataset and serving-view references.
 
 ## Why a modular monolith
 
@@ -169,6 +172,19 @@ curl "http://localhost:8000/api/v1/pipelines?page=1&size=20&status=draft"
 | PUT    | `/api/v1/serving-views/{id}/schedule`             | `serving:write`    |
 | POST   | `/api/v1/serving-views/{id}/retire`               | `serving:write`    |
 | POST   | `/api/v1/serving-views/{id}/query`                | `serving:read`     |
+| POST   | `/api/v1/governance/slos`                         | `governance:write` |
+| GET    | `/api/v1/governance/slos`                         | `governance:read`  |
+| POST   | `/api/v1/governance/slos/evaluate`                | `governance:write` |
+| GET    | `/api/v1/governance/slos/{id}`                    | `governance:read`  |
+| POST   | `/api/v1/governance/slos/{id}/evaluate`           | `governance:write` |
+| PUT    | `/api/v1/governance/slos/{id}/target`             | `governance:write` |
+| POST   | `/api/v1/governance/slos/{id}/suspend`            | `governance:write` |
+| POST   | `/api/v1/governance/slos/{id}/resume`             | `governance:write` |
+| POST   | `/api/v1/governance/slos/{id}/retire`             | `governance:write` |
+| POST   | `/api/v1/governance/costs`                        | `governance:write` |
+| POST   | `/api/v1/governance/costs/import`                 | `governance:write` |
+| GET    | `/api/v1/governance/costs/report`                 | `governance:read`  |
+| GET    | `/api/v1/governance/lineage/{kind}/{id}`          | `governance:read`  |
 | GET    | `/livez`, `/readyz`, `/metrics`                   | none              |
 
 The OpenAPI 3.1 document is served at `/openapi.json`. Errors follow RFC 7807
@@ -199,7 +215,7 @@ in Phase 9.
 4. Stream processing: Flink jobs with exactly-once Iceberg sinks (done).
 5. Lakehouse and transformations: Iceberg medallion tables, dbt, Airflow, data quality (done).
 6. Serving: ClickHouse OLAP, query API, live updates (done).
-7. Observability and governance: lineage, freshness SLAs, cost dashboards.
+7. Observability and governance: lineage, freshness SLAs, cost dashboards (done).
 8. AI-native layer: NL2SQL copilot and a governed data MCP server.
 9. Platform hardening: Kubernetes, Helm, Terraform, GitOps, supply-chain security.
 
@@ -211,6 +227,7 @@ in Phase 9.
 - `docs/processing.md`
 - `docs/lakehouse.md`
 - `docs/serving.md`
+- `docs/governance.md`
 - `docs/configuration.md`
 - `docs/local-development.md`
 - `docs/runbook.md`

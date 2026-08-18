@@ -6,6 +6,9 @@ from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.infrastructure.repositories.contract_repository import (
     SqlAlchemyDataContractRepository,
 )
+from cascade.infrastructure.repositories.cost_entry_repository import (
+    SqlAlchemyCostEntryRepository,
+)
 from cascade.infrastructure.repositories.dataset_repository import (
     SqlAlchemyDatasetRepository,
 )
@@ -16,6 +19,7 @@ from cascade.infrastructure.repositories.pipeline_repository import SqlAlchemyPi
 from cascade.infrastructure.repositories.serving_view_repository import (
     SqlAlchemyServingViewRepository,
 )
+from cascade.infrastructure.repositories.slo_repository import SqlAlchemySloRepository
 from cascade.infrastructure.repositories.stream_job_repository import (
     SqlAlchemyStreamJobRepository,
 )
@@ -34,6 +38,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.stream_jobs = SqlAlchemyStreamJobRepository(self._session)
         self.datasets = SqlAlchemyDatasetRepository(self._session)
         self.serving_views = SqlAlchemyServingViewRepository(self._session)
+        self.slos = SqlAlchemySloRepository(self._session)
+        self.cost_entries = SqlAlchemyCostEntryRepository(self._session)
         return self
 
     async def commit(self) -> None:

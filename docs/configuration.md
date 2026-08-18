@@ -33,6 +33,8 @@ the `CASCADE_` prefix and can also be placed in a `.env` file for local developm
 | `CASCADE_CLICKHOUSE_DATABASE`         | `default`                                 | ClickHouse database for served tables.             |
 | `CASCADE_CLICKHOUSE_USERNAME`         | `default`                                 | ClickHouse username.                               |
 | `CASCADE_CLICKHOUSE_PASSWORD`         | empty                                     | ClickHouse password.                               |
+| `CASCADE_COST_SOURCE_URL`             | empty                                     | Billing export URL for cost imports; empty uses the in-memory source. |
+| `CASCADE_COST_SOURCE_TOKEN`           | empty                                     | Bearer token for the cost source, if required.     |
 | `CASCADE_AUTH_ENABLED`                | `true`                                    | When false, all requests are treated as authorized (local only). |
 | `CASCADE_JWT_ALGORITHM`               | `HS256`                                   | Signing algorithm.                                 |
 | `CASCADE_JWT_SECRET`                  | `change-me-in-production`                 | HS256 shared secret.                               |

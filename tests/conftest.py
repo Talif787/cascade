@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -10,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from cascade.application.common.errors import ConcurrencyError, ConflictError
 from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.application.contracts.registry import RegistrationResult, SchemaRegistry
+from cascade.application.governance.cost_source import CostObservation, CostSource
 from cascade.application.ingestion.runtime import (
     ConnectorHandle,
     ConnectorRuntime,
@@ -39,6 +41,23 @@ from cascade.domain.contracts.value_objects import (
     DataContractId,
     SchemaDefinition,
     SchemaFormat,
+)
+from cascade.domain.governance.aggregate import ServiceLevelObjective
+from cascade.domain.governance.aggregate_cost import CostEntry
+from cascade.domain.governance.repository import (
+    CostEntryRepository,
+    CostSummary,
+    CostSummaryLine,
+    SloQuery,
+    SloRepository,
+    SloSortField,
+)
+from cascade.domain.governance.value_objects import (
+    AssetRef,
+    CostEntryId,
+    SloId,
+    SloName,
+    SloStatus,
 )
 from cascade.domain.ingestion.aggregate import IngestionSource
 from cascade.domain.ingestion.repository import (
@@ -128,6 +147,14 @@ _SERVING_SORT_KEYS = {
     ServingViewSortField.UPDATED_AT: lambda v: v.updated_at,
 }
 
+_SLO_SORT_KEYS = {
+    SloSortField.NAME: lambda s: str(s.name),
+    SloSortField.STATUS: lambda s: s.status.value,
+    SloSortField.STATE: lambda s: s.state.value,
+    SloSortField.CREATED_AT: lambda s: s.created_at,
+    SloSortField.UPDATED_AT: lambda s: s.updated_at,
+}
+
 
 def _clone(pipeline: Pipeline) -> Pipeline:
     return Pipeline(
@@ -192,6 +219,8 @@ class InMemoryUnitOfWork(UnitOfWork):
         job_store: dict[uuid.UUID, StreamJob] | None = None,
         dataset_store: dict[uuid.UUID, Dataset] | None = None,
         serving_store: dict[uuid.UUID, ServingView] | None = None,
+        slo_store: dict[uuid.UUID, ServiceLevelObjective] | None = None,
+        cost_store: dict[uuid.UUID, CostEntry] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
@@ -199,6 +228,8 @@ class InMemoryUnitOfWork(UnitOfWork):
         self._job_store = job_store if job_store is not None else {}
         self._dataset_store = dataset_store if dataset_store is not None else {}
         self._serving_store = serving_store if serving_store is not None else {}
+        self._slo_store = slo_store if slo_store is not None else {}
+        self._cost_store = cost_store if cost_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
@@ -207,6 +238,8 @@ class InMemoryUnitOfWork(UnitOfWork):
         self.stream_jobs = InMemoryStreamJobRepository(self._job_store)
         self.datasets = InMemoryDatasetRepository(self._dataset_store)
         self.serving_views = InMemoryServingViewRepository(self._serving_store)
+        self.slos = InMemorySloRepository(self._slo_store)
+        self.cost_entries = InMemoryCostEntryRepository(self._cost_store)
         return self
 
     async def commit(self) -> None:
@@ -668,6 +701,133 @@ class InMemoryServingViewRepository(ServingViewRepository):
         return ready
 
 
+def _clone_slo(slo: ServiceLevelObjective) -> ServiceLevelObjective:
+    return ServiceLevelObjective(
+        slo.id,
+        name=slo.name,
+        asset=slo.asset,
+        target=slo.target,
+        severity=slo.severity,
+        owner=slo.owner,
+        description=slo.description,
+        status=slo.status,
+        state=slo.state,
+        last_evaluated_at=slo.last_evaluated_at,
+        last_staleness_minutes=slo.last_staleness_minutes,
+        breach_count=slo.breach_count,
+        created_at=slo.created_at,
+        updated_at=slo.updated_at,
+        version=slo.version,
+    )
+
+
+class InMemorySloRepository(SloRepository):
+    def __init__(self, store: dict[uuid.UUID, ServiceLevelObjective]) -> None:
+        self._store = store
+
+    async def add(self, slo: ServiceLevelObjective) -> None:
+        if any(str(s.name) == str(slo.name) for s in self._store.values()):
+            raise ConflictError(f"SLO name {slo.name!s} is already in use")
+        self._store[slo.id.value] = _clone_slo(slo)
+
+    async def update(self, slo: ServiceLevelObjective) -> None:
+        current = self._store.get(slo.id.value)
+        if current is None or current.version != slo.version:
+            raise ConcurrencyError(f"SLO {slo.id!s} was modified concurrently")
+        slo._version = slo.version + 1
+        self._store[slo.id.value] = _clone_slo(slo)
+
+    async def get(self, slo_id: SloId) -> ServiceLevelObjective | None:
+        found = self._store.get(slo_id.value)
+        return _clone_slo(found) if found is not None else None
+
+    async def get_by_name(self, name: SloName) -> ServiceLevelObjective | None:
+        for slo in self._store.values():
+            if str(slo.name) == str(name):
+                return _clone_slo(slo)
+        return None
+
+    async def exists_by_name(self, name: SloName) -> bool:
+        return any(str(s.name) == str(name) for s in self._store.values())
+
+    async def list(self, query: SloQuery) -> tuple[list[ServiceLevelObjective], int]:
+        items = list(self._store.values())
+        if query.asset_kind is not None:
+            items = [s for s in items if s.asset.kind == query.asset_kind]
+        if query.status is not None:
+            items = [s for s in items if s.status == query.status]
+        if query.state is not None:
+            items = [s for s in items if s.state == query.state]
+        items.sort(key=_SLO_SORT_KEYS[query.sort_by], reverse=query.descending)
+        total = len(items)
+        window = items[query.offset : query.offset + query.limit]
+        return [_clone_slo(s) for s in window], total
+
+    async def list_active(self) -> Sequence[ServiceLevelObjective]:
+        active = [_clone_slo(s) for s in self._store.values() if s.status is SloStatus.ACTIVE]
+        active.sort(key=lambda s: str(s.name))
+        return active
+
+
+class InMemoryCostEntryRepository(CostEntryRepository):
+    def __init__(self, store: dict[uuid.UUID, CostEntry]) -> None:
+        self._store = store
+
+    async def add(self, entry: CostEntry) -> None:
+        self._store[entry.id.value] = entry
+
+    async def get(self, entry_id: CostEntryId) -> CostEntry | None:
+        return self._store.get(entry_id.value)
+
+    async def list_for_asset(self, asset: AssetRef) -> Sequence[CostEntry]:
+        return [
+            e
+            for e in self._store.values()
+            if e.asset.kind == asset.kind and e.asset.asset_id == asset.asset_id
+        ]
+
+    async def summarize(
+        self, window_start: datetime | None, window_end: datetime | None
+    ) -> CostSummary:
+        entries = list(self._store.values())
+        if window_start is not None:
+            entries = [e for e in entries if e.period.start >= window_start]
+        if window_end is not None:
+            entries = [e for e in entries if e.period.end <= window_end]
+        total = sum(e.amount.amount_cents for e in entries)
+
+        by_category: dict[str, int] = {}
+        by_asset: dict[str, int] = {}
+        for entry in entries:
+            by_category[entry.category.value] = (
+                by_category.get(entry.category.value, 0) + entry.amount.amount_cents
+            )
+            key = str(entry.asset)
+            by_asset[key] = by_asset.get(key, 0) + entry.amount.amount_cents
+
+        return CostSummary(
+            total_cents=total,
+            by_category=tuple(
+                CostSummaryLine(key=k, amount_cents=v)
+                for k, v in sorted(by_category.items(), key=lambda kv: kv[1], reverse=True)
+            ),
+            by_asset=tuple(
+                CostSummaryLine(key=k, amount_cents=v)
+                for k, v in sorted(by_asset.items(), key=lambda kv: kv[1], reverse=True)
+            ),
+        )
+
+
+class FakeCostSource(CostSource):
+    def __init__(self, observations: tuple[CostObservation, ...] = ()) -> None:
+        self.observations = observations
+
+    async def fetch(
+        self, window_start: datetime, window_end: datetime
+    ) -> tuple[CostObservation, ...]:
+        return self.observations
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -707,6 +867,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "lakehouse:write",
                     "serving:read",
                     "serving:write",
+                    "governance:read",
+                    "governance:write",
                 }
             ),
         )
@@ -754,6 +916,16 @@ def serving_store() -> dict[uuid.UUID, ServingView]:
 
 
 @pytest.fixture
+def slo_store() -> dict[uuid.UUID, ServiceLevelObjective]:
+    return {}
+
+
+@pytest.fixture
+def cost_store() -> dict[uuid.UUID, CostEntry]:
+    return {}
+
+
+@pytest.fixture
 def connector_runtime() -> FakeConnectorRuntime:
     return FakeConnectorRuntime()
 
@@ -779,6 +951,11 @@ def clickhouse_runtime() -> InMemoryClickHouseRuntime:
 
 
 @pytest.fixture
+def cost_source() -> FakeCostSource:
+    return FakeCostSource()
+
+
+@pytest.fixture
 def cache() -> FakeCache:
     return FakeCache()
 
@@ -791,11 +968,14 @@ def components(
     job_store: dict[uuid.UUID, StreamJob],
     dataset_store: dict[uuid.UUID, Dataset],
     serving_store: dict[uuid.UUID, ServingView],
+    slo_store: dict[uuid.UUID, ServiceLevelObjective],
+    cost_store: dict[uuid.UUID, CostEntry],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
     clickhouse_runtime: InMemoryClickHouseRuntime,
+    cost_source: FakeCostSource,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -803,7 +983,14 @@ def components(
 
     return AppComponents(
         uow_factory=lambda: InMemoryUnitOfWork(
-            store, contract_store, source_store, job_store, dataset_store, serving_store
+            store,
+            contract_store,
+            source_store,
+            job_store,
+            dataset_store,
+            serving_store,
+            slo_store,
+            cost_store,
         ),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
@@ -813,6 +1000,7 @@ def components(
         transformation_runtime=transformation_runtime,
         orchestrator=orchestrator,
         clickhouse_runtime=clickhouse_runtime,
+        cost_source=cost_source,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -844,6 +1032,7 @@ class ReadOnlyTokenVerifier(TokenVerifier):
                     "processing:read",
                     "lakehouse:read",
                     "serving:read",
+                    "governance:read",
                 }
             ),
         )
@@ -857,11 +1046,14 @@ def readonly_components(
     job_store: dict[uuid.UUID, StreamJob],
     dataset_store: dict[uuid.UUID, Dataset],
     serving_store: dict[uuid.UUID, ServingView],
+    slo_store: dict[uuid.UUID, ServiceLevelObjective],
+    cost_store: dict[uuid.UUID, CostEntry],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
     clickhouse_runtime: InMemoryClickHouseRuntime,
+    cost_source: FakeCostSource,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -869,7 +1061,14 @@ def readonly_components(
 
     return AppComponents(
         uow_factory=lambda: InMemoryUnitOfWork(
-            store, contract_store, source_store, job_store, dataset_store, serving_store
+            store,
+            contract_store,
+            source_store,
+            job_store,
+            dataset_store,
+            serving_store,
+            slo_store,
+            cost_store,
         ),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
@@ -879,6 +1078,7 @@ def readonly_components(
         transformation_runtime=transformation_runtime,
         orchestrator=orchestrator,
         clickhouse_runtime=clickhouse_runtime,
+        cost_source=cost_source,
         health_checks={"database": _ok, "redis": _ok},
     )
 

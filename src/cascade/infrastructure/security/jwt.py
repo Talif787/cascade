@@ -106,6 +106,8 @@ class AllowAllTokenVerifier(TokenVerifier):
                     "lakehouse:write",
                     "serving:read",
                     "serving:write",
+                    "governance:read",
+                    "governance:write",
                 }
             ),
         )

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from cascade.application.common.unit_of_work import UnitOfWorkFactory
 from cascade.application.contracts.registry import SchemaRegistry
+from cascade.application.governance.cost_source import CostSource
 from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.application.lakehouse.orchestration import Orchestrator
 from cascade.application.lakehouse.transformation import TransformationRuntime
@@ -29,6 +30,7 @@ from cascade.presentation.api.middleware.logging import AccessLogMiddleware
 from cascade.presentation.api.middleware.rate_limit import RateLimitMiddleware
 from cascade.presentation.api.routers import (
     contracts,
+    governance,
     health,
     ingestion,
     lakehouse,
@@ -53,6 +55,7 @@ class AppComponents:
     transformation_runtime: TransformationRuntime
     orchestrator: Orchestrator
     clickhouse_runtime: ClickHouseRuntime
+    cost_source: CostSource
     health_checks: dict[str, HealthCheck] = field(default_factory=dict)
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -75,6 +78,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
         app.state.transformation_runtime = resolved.transformation_runtime
         app.state.orchestrator = resolved.orchestrator
         app.state.clickhouse_runtime = resolved.clickhouse_runtime
+        app.state.cost_source = resolved.cost_source
         app.state.health_checks = resolved.health_checks
         instrument_app(app, resolved.engine, settings)
         _logger.info("application_started", environment=settings.environment.value)
@@ -114,6 +118,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
     app.include_router(processing.router)
     app.include_router(lakehouse.router)
     app.include_router(serving.router)
+    app.include_router(governance.router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
@@ -129,6 +134,7 @@ def _build_components(settings: Settings) -> AppComponents:
     from cascade.infrastructure.cache.redis_cache import RedisCache
     from cascade.infrastructure.clickhouse.factory import build_clickhouse_runtime
     from cascade.infrastructure.connect.factory import build_connector_runtime
+    from cascade.infrastructure.cost.factory import build_cost_source
     from cascade.infrastructure.database.engine import create_engine, create_session_factory
     from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
     from cascade.infrastructure.flink.factory import build_flink_runtime
@@ -160,6 +166,7 @@ def _build_components(settings: Settings) -> AppComponents:
         transformation_runtime=build_transformation_runtime(settings),
         orchestrator=build_orchestrator(settings),
         clickhouse_runtime=build_clickhouse_runtime(settings),
+        cost_source=build_cost_source(settings),
         health_checks={"database": _check_database, "redis": _check_redis},
         engine=engine,
         redis=redis,
