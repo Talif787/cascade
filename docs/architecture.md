@@ -254,3 +254,25 @@ the tool list, and the protocol details.
 - Traces: OpenTelemetry spans exported over OTLP/HTTP when `CASCADE_OTEL_ENABLED=true`,
   with FastAPI and SQLAlchemy auto-instrumentation.
 - Probes: `/livez` for liveness and `/readyz` for readiness (checks database and Redis).
+
+## Deployment topology
+
+The control plane is a stateless container that scales horizontally behind a
+Service. All persistent state lives in Postgres (the system of record) and Redis
+(idempotency, rate limiting, and caches); the pods hold nothing that cannot be
+rebuilt, which is what lets the HPA add and remove replicas freely and lets the
+PodDisruptionBudget tolerate voluntary evictions.
+
+Schema changes are decoupled from rollout: the Helm chart runs `alembic upgrade
+head` as a pre-install and pre-upgrade hook Job that must succeed before the new
+ReplicaSet scales up, so application pods never start against an unmigrated
+schema. The data plane (Kafka, Debezium, Flink, Iceberg, ClickHouse) scales on
+its own and is reached through the runtime ports described in the phase docs, not
+embedded in the control-plane pods.
+
+Provisioning and delivery are code. Terraform stands up the GCP substrate
+(private GKE, Cloud SQL, Memorystore, Artifact Registry, Workload Identity), and
+Argo CD reconciles the cluster to the Helm chart on every commit to `main`.
+Release images are signed and carry an SBOM attestation, so what runs in the
+cluster can be traced back to a specific, verified build. See `docs/deployment.md`
+for the full walkthrough.

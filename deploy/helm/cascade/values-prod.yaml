@@ -1,0 +1,58 @@
+# Production overlay. Apply with:
+#   helm upgrade --install cascade deploy/helm/cascade -f values-prod.yaml
+# Secrets are expected to come from an existing Kubernetes Secret provisioned
+# out of band (for example, by External Secrets or Terraform), never inlined.
+
+replicaCount: 3
+
+image:
+  pullPolicy: IfNotPresent
+  # Set this to the immutable digest built and signed by the release workflow.
+  # tag: "sha256:..."
+
+config:
+  CASCADE_ENVIRONMENT: production
+  CASCADE_AUTH_ENABLED: "true"
+  CASCADE_OTEL_ENABLED: "true"
+  CASCADE_OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability:4318"
+
+secret:
+  existingSecret: cascade-secrets
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 384Mi
+  limits:
+    cpu: "2"
+    memory: 768Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 75
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: cascade.internal.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cascade-tls
+      hosts:
+        - cascade.internal.example.com
+
+networkPolicy:
+  enabled: true

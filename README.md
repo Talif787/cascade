@@ -7,7 +7,7 @@ processing jobs, and serve platform metadata. The compute-heavy data plane (Kafk
 Debezium, Flink, Iceberg) scales horizontally on its own and is layered in over the
 phases described below.
 
-This repository currently contains Phases 1 through 8: the control-plane foundation with
+This repository contains all nine phases of the roadmap, Phases 1 through 9: the control-plane foundation with
 a complete vertical slice for the Pipeline aggregate, the Data Contracts bounded context
 with a schema compatibility engine and pluggable schema registry, the Ingestion
 bounded context that manages source connectors (through a Kafka Connect / Debezium runtime
@@ -25,6 +25,8 @@ translator (rule-based by default, or an LLM) proposes a structured query, the s
 view validates the proposal against its declared columns before anything runs, and the
 result plus an audit record are returned. A governed MCP server exposes the serving,
 governance, and copilot capabilities to AI agents as JSON-RPC tools with per-tool scopes.
+Phase 9 hardens the platform for production: a Helm chart, a Terraform GCP skeleton,
+GitOps via Argo CD, and a signed, SBOM-attested supply chain.
 
 ## Why a modular monolith
 
@@ -207,12 +209,22 @@ make cov               # with coverage
 make test-integration  # repository tests against a throwaway Postgres (needs Docker)
 ```
 
-## Deployment (Phase 1 scope)
+## Deployment
 
 The service ships as a single container image built from the multi-stage `Dockerfile`
-(non-root user, healthcheck on `/livez`). Migrations run as a pre-start step
-(`alembic upgrade head`). Full Kubernetes manifests, Helm charts, and Terraform arrive
-in Phase 9.
+(non-root user, read-only root filesystem, healthcheck on `/livez`). Everything needed to
+run it in production lives under `deploy/`:
+
+- `deploy/helm/cascade`: a Helm chart with a hardened Deployment, a pre-install and
+  pre-upgrade migration hook (`alembic upgrade head`), Service, Ingress, HPA,
+  PodDisruptionBudget, a default-deny NetworkPolicy, and a `values-prod.yaml` overlay.
+- `deploy/terraform`: a Terraform skeleton that provisions the GCP substrate (private
+  GKE, Cloud SQL Postgres, Memorystore Redis, Artifact Registry, and Workload Identity).
+- `deploy/argocd`: an Argo CD `AppProject` and `Application` for GitOps delivery of the
+  chart with automated sync, prune, and self-heal.
+
+Release images are signed keyless with cosign, carry an SBOM attestation, and are scanned
+with Trivy by the `release` workflow. See `docs/deployment.md` for the full walkthrough.
 
 ## Roadmap
 
@@ -224,7 +236,7 @@ in Phase 9.
 6. Serving: ClickHouse OLAP, query API, live updates (done).
 7. Observability and governance: lineage, freshness SLAs, cost dashboards (done).
 8. AI-native layer: NL2SQL copilot and a governed data MCP server (done).
-9. Platform hardening: Kubernetes, Helm, Terraform, GitOps, supply-chain security.
+9. Platform hardening: Kubernetes, Helm, Terraform, GitOps, supply-chain security (done).
 
 ## Documentation
 
@@ -239,4 +251,5 @@ in Phase 9.
 - `docs/mcp.md`
 - `docs/configuration.md`
 - `docs/local-development.md`
+- `docs/deployment.md`
 - `docs/runbook.md`

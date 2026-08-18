@@ -17,3 +17,10 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+
+# Terraform
+deploy/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+deploy/terraform/terraform.tfvars
+crash.log

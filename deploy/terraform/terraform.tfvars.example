@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in. Do not commit the real file.
+project_id = "your-gcp-project"
+region     = "us-central1"
+
+name_prefix      = "cascade"
+gke_node_count   = 2
+gke_machine_type = "e2-standard-2"
+
+postgres_tier    = "db-custom-2-7680"
+postgres_version = "POSTGRES_16"
+# Provide via TF_VAR_postgres_password or a *.auto.tfvars excluded from git.
+# postgres_password = "set-me-out-of-band"
+
+redis_memory_gb = 1
+
+kubernetes_namespace       = "cascade"
+kubernetes_service_account = "cascade"

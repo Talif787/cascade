@@ -1,0 +1,140 @@
+# Default values for the cascade chart.
+# Every value here is overridable per environment (see values-prod.yaml).
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/talif787/cascade
+  # Pin to an immutable digest in production; a tag is shown here for readability.
+  tag: ""  # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Non-secret configuration rendered into a ConfigMap as CASCADE_ env vars.
+config:
+  CASCADE_ENVIRONMENT: production
+  CASCADE_LOG_JSON: "true"
+  CASCADE_HTTP_HOST: "0.0.0.0"
+  CASCADE_HTTP_PORT: "8000"
+  CASCADE_AUTH_ENABLED: "true"
+  CASCADE_RATE_LIMIT_ENABLED: "true"
+  CASCADE_OTEL_ENABLED: "false"
+
+# Secret values. Prefer an existing secret (existingSecret) over inlining these.
+# When existingSecret is set, the chart references it and ignores the inline map.
+secret:
+  existingSecret: ""
+  # Keys map to CASCADE_ env vars. Leave empty and use existingSecret in real
+  # environments; these inline values are for local or throwaway clusters only.
+  data:
+    CASCADE_DATABASE_URL: ""
+    CASCADE_REDIS_URL: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: cascade.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Pod-level hardening. These are secure defaults; override only with reason.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  capabilities:
+    drop:
+      - ALL
+
+# Liveness, readiness, and startup probes hit the app health endpoints.
+probes:
+  liveness:
+    path: /livez
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    path: /livez
+    periodSeconds: 5
+    failureThreshold: 30
+
+# The migration Job runs alembic upgrade head as a pre-install/pre-upgrade hook.
+migrations:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+
+networkPolicy:
+  enabled: true
+  # CIDR blocks allowed to reach the pods on the app port (for example, the
+  # ingress controller namespace range). Empty means allow from within the
+  # namespace only, plus DNS egress.
+  ingressFromCIDRs: []
+
+# Spread pods across nodes and zones for availability.
+topologySpreadConstraints:
+  enabled: true
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

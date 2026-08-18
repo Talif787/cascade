@@ -1,0 +1,15 @@
+apiVersion: v2
+name: cascade
+description: The Cascade data-platform control plane (FastAPI, Postgres, Redis)
+type: application
+version: 0.9.0
+appVersion: "0.9.0"
+keywords:
+  - cascade
+  - control-plane
+  - data-platform
+home: https://github.com/Talif787/cascade
+sources:
+  - https://github.com/Talif787/cascade
+maintainers:
+  - name: Talif
