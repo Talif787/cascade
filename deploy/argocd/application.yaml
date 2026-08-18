@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cascade
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/manifest-generate-paths: /deploy/helm/cascade
+finalizers:
+  - resources-finalizer.argocd.argoproj.io
+spec:
+  project: cascade
+  source:
+    repoURL: https://github.com/Talif787/cascade.git
+    targetRevision: main
+    path: deploy/helm/cascade
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cascade
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
