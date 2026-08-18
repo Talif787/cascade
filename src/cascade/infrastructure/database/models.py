@@ -300,3 +300,75 @@ class ServingViewModel(Base):
         Index("ix_serving_views_source_dataset_id", "source_dataset_id"),
         Index("ix_serving_views_created_at", "created_at"),
     )
+
+
+_ASSET_KIND_VALUES = (
+    "pipeline",
+    "ingestion_source",
+    "stream_job",
+    "dataset",
+    "serving_view",
+)
+
+_SLO_STATUS_VALUES = ("active", "suspended", "retired")
+_COMPLIANCE_STATE_VALUES = ("unknown", "meeting", "at_risk", "breached")
+_SEVERITY_VALUES = ("low", "medium", "high", "critical")
+_COST_CATEGORY_VALUES = ("compute", "storage", "transfer")
+
+
+class SloModel(Base):
+    __tablename__ = "freshness_slos"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    asset_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    max_staleness_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_staleness_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    breach_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"asset_kind IN {_ASSET_KIND_VALUES}", name="ck_freshness_slos_asset_kind"),
+        CheckConstraint(f"status IN {_SLO_STATUS_VALUES}", name="ck_freshness_slos_status"),
+        CheckConstraint(f"state IN {_COMPLIANCE_STATE_VALUES}", name="ck_freshness_slos_state"),
+        CheckConstraint(f"severity IN {_SEVERITY_VALUES}", name="ck_freshness_slos_severity"),
+        Index("ix_freshness_slos_status", "status"),
+        Index("ix_freshness_slos_state", "state"),
+        Index("ix_freshness_slos_asset", "asset_kind", "asset_id"),
+    )
+
+
+class CostEntryModel(Base):
+    __tablename__ = "cost_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    asset_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"asset_kind IN {_ASSET_KIND_VALUES}", name="ck_cost_entries_asset_kind"),
+        CheckConstraint(f"category IN {_COST_CATEGORY_VALUES}", name="ck_cost_entries_category"),
+        CheckConstraint("amount_cents >= 0", name="ck_cost_entries_amount"),
+        Index("ix_cost_entries_asset", "asset_kind", "asset_id"),
+        Index("ix_cost_entries_period_start", "period_start"),
+        Index("ix_cost_entries_category", "category"),
+    )

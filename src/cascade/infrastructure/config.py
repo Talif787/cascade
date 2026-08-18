@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     clickhouse_username: str = "default"
     clickhouse_password: str = ""
 
+    cost_source_url: str | None = None
+    cost_source_token: str | None = None
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None
