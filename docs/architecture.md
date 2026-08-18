@@ -29,6 +29,7 @@ src/cascade/
     lakehouse/       Dataset aggregate, medallion layers, transformation, schedule, quality
     serving/         ServingView aggregate, ClickHouse engine, exposed columns, query plan
     governance/      ServiceLevelObjective and CostEntry aggregates, asset refs, compliance
+    copilot/         CopilotQuery aggregate, question, translated query, status lifecycle
   application/
     common/          UnitOfWork port, Page, application errors
     pipelines/       commands, queries, DTOs, PipelineApplicationService
@@ -38,6 +39,7 @@ src/cascade/
     lakehouse/       commands, queries, DTOs, TransformationRuntime + Orchestrator ports, service
     serving/         commands, queries, DTOs, ClickHouseRuntime port, service
     governance/      commands, queries, DTOs, CostSource port, lineage read model, service
+    copilot/         commands, DTOs, Nl2SqlTranslator port, service
   infrastructure/
     config.py        pydantic-settings configuration (12-factor)
     logging.py       structlog wiring
@@ -52,6 +54,7 @@ src/cascade/
     orchestrate/     orchestrator: in-memory and Airflow REST adapters
     clickhouse/      ClickHouse runtime: in-memory (executes queries) and HTTP adapters, SQL builder
     cost/            cost source: in-memory (synthetic) and HTTP billing adapters
+    copilot/         NL2SQL translator: rule-based and LLM adapters
     cache/           cache port and Redis implementation
     security/        JWT verification and Principal
   sdk/               standalone producer client and record validator (httpx + stdlib only)
@@ -207,6 +210,30 @@ since a governed asset can live in any of several tables. The service validates 
 referenced asset exists by dispatching to the right repository for its kind, so integrity is
 enforced in the application layer rather than the schema. See `docs/governance.md` for the
 compliance model, the cost flow, and the endpoint list.
+
+## The AI-native layer
+
+The copilot context turns a natural-language question into a governed query. Its aggregate,
+`CopilotQuery`, is an audit record with a lifecycle: asked, then translated or rejected, then
+executed or failed. The translation itself is a port, `Nl2SqlTranslator`, with a rule-based
+default adapter (deterministic keyword and column matching, no external call) and an LLM
+adapter. The important property is that the translator only ever proposes columns; it never
+touches data. The application service takes the proposal, builds a serving query request, and
+validates it against the target serving view's own `plan_query` before anything runs. A
+hallucinated column, a measure used as a dimension, or a query against a view that is not
+ready is rejected by the same domain rules that guard the serving API, and the rejection is
+recorded. Only a validated query reaches the ClickHouse runtime. This is why the copilot is
+governed rather than a raw text-to-SQL bridge: the model proposes, the domain disposes.
+
+The MCP server exposes the platform to AI agents through the Model Context Protocol over
+JSON-RPC at a single endpoint. It is a thin presentation layer: a tool registry maps each
+tool to an existing application service (list and query serving views, ask the copilot, get
+lineage, list SLOs, get the cost report), and every tool declares the scope it needs. The
+endpoint authenticates the caller once, and each tool call checks the caller's scopes before
+dispatching, so an agent can only reach what its token allows. Tool-level failures are
+returned as result content marked as an error, following the MCP convention, so the agent can
+read and react to them. See `docs/copilot.md` and `docs/mcp.md` for the translation model,
+the tool list, and the protocol details.
 
 ## Cross-cutting concerns
 

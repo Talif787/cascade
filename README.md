@@ -7,7 +7,7 @@ processing jobs, and serve platform metadata. The compute-heavy data plane (Kafk
 Debezium, Flink, Iceberg) scales horizontally on its own and is layered in over the
 phases described below.
 
-This repository currently contains Phases 1 through 7: the control-plane foundation with
+This repository currently contains Phases 1 through 8: the control-plane foundation with
 a complete vertical slice for the Pipeline aggregate, the Data Contracts bounded context
 with a schema compatibility engine and pluggable schema registry, the Ingestion
 bounded context that manages source connectors (through a Kafka Connect / Debezium runtime
@@ -18,10 +18,13 @@ context that manages medallion Iceberg tables (through dbt and Airflow runtime p
 enforcing medallion layering and wiring data-quality results into the materialization
 lifecycle, the Serving bounded context that manages ClickHouse-backed serving views
 (through a ClickHouse runtime port) with a constrained analytics query API validated
-against each view's declared columns, and the Governance bounded context that layers
-observability over every asset: freshness SLOs that evaluate compliance against an asset's
-last refresh, cost accounting imported through a cost-source port and rolled up into a
-report, and an end-to-end lineage graph assembled from dataset and serving-view references.
+against each view's declared columns, the Governance bounded context that layers
+observability over every asset (freshness SLOs, cost accounting, and lineage), and the
+Copilot bounded context that turns natural-language questions into governed queries: a
+translator (rule-based by default, or an LLM) proposes a structured query, the serving
+view validates the proposal against its declared columns before anything runs, and the
+result plus an audit record are returned. A governed MCP server exposes the serving,
+governance, and copilot capabilities to AI agents as JSON-RPC tools with per-tool scopes.
 
 ## Why a modular monolith
 
@@ -185,6 +188,10 @@ curl "http://localhost:8000/api/v1/pipelines?page=1&size=20&status=draft"
 | POST   | `/api/v1/governance/costs/import`                 | `governance:write` |
 | GET    | `/api/v1/governance/costs/report`                 | `governance:read`  |
 | GET    | `/api/v1/governance/lineage/{kind}/{id}`          | `governance:read`  |
+| POST   | `/api/v1/copilot/ask`                             | `copilot:write`    |
+| GET    | `/api/v1/copilot/queries`                         | `copilot:read`     |
+| GET    | `/api/v1/copilot/queries/{id}`                    | `copilot:read`     |
+| POST   | `/mcp`                                            | per-tool scope     |
 | GET    | `/livez`, `/readyz`, `/metrics`                   | none              |
 
 The OpenAPI 3.1 document is served at `/openapi.json`. Errors follow RFC 7807
@@ -216,7 +223,7 @@ in Phase 9.
 5. Lakehouse and transformations: Iceberg medallion tables, dbt, Airflow, data quality (done).
 6. Serving: ClickHouse OLAP, query API, live updates (done).
 7. Observability and governance: lineage, freshness SLAs, cost dashboards (done).
-8. AI-native layer: NL2SQL copilot and a governed data MCP server.
+8. AI-native layer: NL2SQL copilot and a governed data MCP server (done).
 9. Platform hardening: Kubernetes, Helm, Terraform, GitOps, supply-chain security.
 
 ## Documentation
@@ -228,6 +235,8 @@ in Phase 9.
 - `docs/lakehouse.md`
 - `docs/serving.md`
 - `docs/governance.md`
+- `docs/copilot.md`
+- `docs/mcp.md`
 - `docs/configuration.md`
 - `docs/local-development.md`
 - `docs/runbook.md`

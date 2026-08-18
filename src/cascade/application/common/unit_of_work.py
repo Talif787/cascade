@@ -5,6 +5,7 @@ from collections.abc import Callable
 from types import TracebackType
 
 from cascade.domain.contracts.repository import DataContractRepository
+from cascade.domain.copilot.repository import CopilotQueryRepository
 from cascade.domain.governance.repository import CostEntryRepository, SloRepository
 from cascade.domain.ingestion.repository import IngestionSourceRepository
 from cascade.domain.lakehouse.repository import DatasetRepository
@@ -24,6 +25,7 @@ class UnitOfWork(ABC):
     serving_views: ServingViewRepository
     slos: SloRepository
     cost_entries: CostEntryRepository
+    copilot_queries: CopilotQueryRepository
 
     async def __aenter__(self) -> UnitOfWork:
         return self

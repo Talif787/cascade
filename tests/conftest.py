@@ -11,6 +11,11 @@ from httpx import ASGITransport, AsyncClient
 from cascade.application.common.errors import ConcurrencyError, ConflictError
 from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.application.contracts.registry import RegistrationResult, SchemaRegistry
+from cascade.application.copilot.translator import (
+    Nl2SqlTranslator,
+    TranslationResult,
+    TranslationSchema,
+)
 from cascade.application.governance.cost_source import CostObservation, CostSource
 from cascade.application.ingestion.runtime import (
     ConnectorHandle,
@@ -42,6 +47,12 @@ from cascade.domain.contracts.value_objects import (
     SchemaDefinition,
     SchemaFormat,
 )
+from cascade.domain.copilot.aggregate import CopilotQuery
+from cascade.domain.copilot.repository import (
+    CopilotQueryFilter,
+    CopilotQueryRepository,
+)
+from cascade.domain.copilot.value_objects import CopilotQueryId
 from cascade.domain.governance.aggregate import ServiceLevelObjective
 from cascade.domain.governance.aggregate_cost import CostEntry
 from cascade.domain.governance.repository import (
@@ -221,6 +232,7 @@ class InMemoryUnitOfWork(UnitOfWork):
         serving_store: dict[uuid.UUID, ServingView] | None = None,
         slo_store: dict[uuid.UUID, ServiceLevelObjective] | None = None,
         cost_store: dict[uuid.UUID, CostEntry] | None = None,
+        copilot_store: dict[uuid.UUID, CopilotQuery] | None = None,
     ) -> None:
         self._pipeline_store = pipeline_store
         self._contract_store = contract_store
@@ -230,6 +242,7 @@ class InMemoryUnitOfWork(UnitOfWork):
         self._serving_store = serving_store if serving_store is not None else {}
         self._slo_store = slo_store if slo_store is not None else {}
         self._cost_store = cost_store if cost_store is not None else {}
+        self._copilot_store = copilot_store if copilot_store is not None else {}
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         self.pipelines = InMemoryPipelineRepository(self._pipeline_store)
@@ -240,6 +253,7 @@ class InMemoryUnitOfWork(UnitOfWork):
         self.serving_views = InMemoryServingViewRepository(self._serving_store)
         self.slos = InMemorySloRepository(self._slo_store)
         self.cost_entries = InMemoryCostEntryRepository(self._cost_store)
+        self.copilot_queries = InMemoryCopilotQueryRepository(self._copilot_store)
         return self
 
     async def commit(self) -> None:
@@ -828,6 +842,49 @@ class FakeCostSource(CostSource):
         return self.observations
 
 
+class InMemoryCopilotQueryRepository(CopilotQueryRepository):
+    def __init__(self, store: dict[uuid.UUID, CopilotQuery]) -> None:
+        self._store = store
+
+    async def add(self, query: CopilotQuery) -> None:
+        self._store[query.id.value] = query
+
+    async def update(self, query: CopilotQuery) -> None:
+        current = self._store.get(query.id.value)
+        if current is None or current.version != query.version:
+            raise ConcurrencyError(f"copilot query {query.id!s} was modified concurrently")
+        query._version = query.version + 1
+        self._store[query.id.value] = query
+
+    async def get(self, query_id: CopilotQueryId) -> CopilotQuery | None:
+        return self._store.get(query_id.value)
+
+    async def list(self, query_filter: CopilotQueryFilter) -> tuple[list[CopilotQuery], int]:
+        items = list(self._store.values())
+        if query_filter.status is not None:
+            items = [q for q in items if q.status == query_filter.status]
+        if query_filter.view_id is not None:
+            items = [q for q in items if q.view_id == query_filter.view_id]
+        items.sort(key=lambda q: q.created_at, reverse=query_filter.descending)
+        total = len(items)
+        window = items[query_filter.offset : query_filter.offset + query_filter.limit]
+        return window, total
+
+    async def recent(self, limit: int) -> Sequence[CopilotQuery]:
+        items = sorted(self._store.values(), key=lambda q: q.created_at, reverse=True)
+        return items[:limit]
+
+
+class FakeTranslator(Nl2SqlTranslator):
+    def __init__(self, result: TranslationResult | None = None) -> None:
+        self.result = result if result is not None else TranslationResult()
+        self.calls: list[str] = []
+
+    async def translate(self, question: str, schema: TranslationSchema) -> TranslationResult:
+        self.calls.append(question)
+        return self.result
+
+
 class FakeCache(Cache):
     def __init__(self) -> None:
         self._idempotency: dict[str, IdempotentResponse] = {}
@@ -869,6 +926,8 @@ class StaticTokenVerifier(TokenVerifier):
                     "serving:write",
                     "governance:read",
                     "governance:write",
+                    "copilot:read",
+                    "copilot:write",
                 }
             ),
         )
@@ -926,6 +985,11 @@ def cost_store() -> dict[uuid.UUID, CostEntry]:
 
 
 @pytest.fixture
+def copilot_store() -> dict[uuid.UUID, CopilotQuery]:
+    return {}
+
+
+@pytest.fixture
 def connector_runtime() -> FakeConnectorRuntime:
     return FakeConnectorRuntime()
 
@@ -956,6 +1020,11 @@ def cost_source() -> FakeCostSource:
 
 
 @pytest.fixture
+def translator() -> FakeTranslator:
+    return FakeTranslator()
+
+
+@pytest.fixture
 def cache() -> FakeCache:
     return FakeCache()
 
@@ -970,12 +1039,14 @@ def components(
     serving_store: dict[uuid.UUID, ServingView],
     slo_store: dict[uuid.UUID, ServiceLevelObjective],
     cost_store: dict[uuid.UUID, CostEntry],
+    copilot_store: dict[uuid.UUID, CopilotQuery],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
     clickhouse_runtime: InMemoryClickHouseRuntime,
     cost_source: FakeCostSource,
+    translator: FakeTranslator,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -991,6 +1062,7 @@ def components(
             serving_store,
             slo_store,
             cost_store,
+            copilot_store,
         ),
         cache=cache,
         token_verifier=StaticTokenVerifier(),
@@ -1001,6 +1073,7 @@ def components(
         orchestrator=orchestrator,
         clickhouse_runtime=clickhouse_runtime,
         cost_source=cost_source,
+        translator=translator,
         health_checks={"database": _ok, "redis": _ok},
     )
 
@@ -1033,6 +1106,7 @@ class ReadOnlyTokenVerifier(TokenVerifier):
                     "lakehouse:read",
                     "serving:read",
                     "governance:read",
+                    "copilot:read",
                 }
             ),
         )
@@ -1048,12 +1122,14 @@ def readonly_components(
     serving_store: dict[uuid.UUID, ServingView],
     slo_store: dict[uuid.UUID, ServiceLevelObjective],
     cost_store: dict[uuid.UUID, CostEntry],
+    copilot_store: dict[uuid.UUID, CopilotQuery],
     connector_runtime: FakeConnectorRuntime,
     flink_runtime: FakeFlinkRuntime,
     transformation_runtime: FakeTransformationRuntime,
     orchestrator: FakeOrchestrator,
     clickhouse_runtime: InMemoryClickHouseRuntime,
     cost_source: FakeCostSource,
+    translator: FakeTranslator,
     cache: FakeCache,
 ) -> AppComponents:
     async def _ok() -> bool:
@@ -1069,6 +1145,7 @@ def readonly_components(
             serving_store,
             slo_store,
             cost_store,
+            copilot_store,
         ),
         cache=cache,
         token_verifier=ReadOnlyTokenVerifier(),
@@ -1079,6 +1156,7 @@ def readonly_components(
         orchestrator=orchestrator,
         clickhouse_runtime=clickhouse_runtime,
         cost_source=cost_source,
+        translator=translator,
         health_checks={"database": _ok, "redis": _ok},
     )
 

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from cascade.application.common.unit_of_work import UnitOfWorkFactory
 from cascade.application.contracts.registry import SchemaRegistry
+from cascade.application.copilot.translator import Nl2SqlTranslator
 from cascade.application.governance.cost_source import CostSource
 from cascade.application.ingestion.runtime import ConnectorRuntime
 from cascade.application.lakehouse.orchestration import Orchestrator
@@ -30,6 +31,7 @@ from cascade.presentation.api.middleware.logging import AccessLogMiddleware
 from cascade.presentation.api.middleware.rate_limit import RateLimitMiddleware
 from cascade.presentation.api.routers import (
     contracts,
+    copilot,
     governance,
     health,
     ingestion,
@@ -38,6 +40,7 @@ from cascade.presentation.api.routers import (
     processing,
     serving,
 )
+from cascade.presentation.mcp.router import router as mcp_router
 
 HealthCheck = Callable[[], Awaitable[bool]]
 
@@ -56,6 +59,7 @@ class AppComponents:
     orchestrator: Orchestrator
     clickhouse_runtime: ClickHouseRuntime
     cost_source: CostSource
+    translator: Nl2SqlTranslator
     health_checks: dict[str, HealthCheck] = field(default_factory=dict)
     engine: AsyncEngine | None = None
     redis: Any | None = None
@@ -79,6 +83,7 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
         app.state.orchestrator = resolved.orchestrator
         app.state.clickhouse_runtime = resolved.clickhouse_runtime
         app.state.cost_source = resolved.cost_source
+        app.state.translator = resolved.translator
         app.state.health_checks = resolved.health_checks
         instrument_app(app, resolved.engine, settings)
         _logger.info("application_started", environment=settings.environment.value)
@@ -119,6 +124,8 @@ def create_app(settings: Settings, components: AppComponents | None = None) -> F
     app.include_router(lakehouse.router)
     app.include_router(serving.router)
     app.include_router(governance.router)
+    app.include_router(copilot.router)
+    app.include_router(mcp_router)
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
@@ -134,6 +141,7 @@ def _build_components(settings: Settings) -> AppComponents:
     from cascade.infrastructure.cache.redis_cache import RedisCache
     from cascade.infrastructure.clickhouse.factory import build_clickhouse_runtime
     from cascade.infrastructure.connect.factory import build_connector_runtime
+    from cascade.infrastructure.copilot.factory import build_translator
     from cascade.infrastructure.cost.factory import build_cost_source
     from cascade.infrastructure.database.engine import create_engine, create_session_factory
     from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
@@ -167,6 +175,7 @@ def _build_components(settings: Settings) -> AppComponents:
         orchestrator=build_orchestrator(settings),
         clickhouse_runtime=build_clickhouse_runtime(settings),
         cost_source=build_cost_source(settings),
+        translator=build_translator(settings),
         health_checks={"database": _check_database, "redis": _check_redis},
         engine=engine,
         redis=redis,
