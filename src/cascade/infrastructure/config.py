@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     cost_source_url: str | None = None
     cost_source_token: str | None = None
 
+    copilot_api_url: str | None = None
+    copilot_api_key: str | None = None
+    copilot_model: str = "gpt-4o-mini"
+
     jwt_algorithm: str = "HS256"
     jwt_secret: str = "change-me-in-production"
     jwt_jwks_url: str | None = None

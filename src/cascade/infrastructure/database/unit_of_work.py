@@ -6,6 +6,9 @@ from cascade.application.common.unit_of_work import UnitOfWork
 from cascade.infrastructure.repositories.contract_repository import (
     SqlAlchemyDataContractRepository,
 )
+from cascade.infrastructure.repositories.copilot_query_repository import (
+    SqlAlchemyCopilotQueryRepository,
+)
 from cascade.infrastructure.repositories.cost_entry_repository import (
     SqlAlchemyCostEntryRepository,
 )
@@ -40,6 +43,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self.serving_views = SqlAlchemyServingViewRepository(self._session)
         self.slos = SqlAlchemySloRepository(self._session)
         self.cost_entries = SqlAlchemyCostEntryRepository(self._session)
+        self.copilot_queries = SqlAlchemyCopilotQueryRepository(self._session)
         return self
 
     async def commit(self) -> None:

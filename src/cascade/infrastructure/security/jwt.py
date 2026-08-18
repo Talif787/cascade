@@ -108,6 +108,8 @@ class AllowAllTokenVerifier(TokenVerifier):
                     "serving:write",
                     "governance:read",
                     "governance:write",
+                    "copilot:read",
+                    "copilot:write",
                 }
             ),
         )

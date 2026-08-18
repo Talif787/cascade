@@ -372,3 +372,29 @@ class CostEntryModel(Base):
         Index("ix_cost_entries_period_start", "period_start"),
         Index("ix_cost_entries_category", "category"),
     )
+
+
+_COPILOT_STATUS_VALUES = ("asked", "translated", "rejected", "executed", "failed")
+
+
+class CopilotQueryModel(Base):
+    __tablename__ = "copilot_queries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    view_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    view_name: Mapped[str] = mapped_column(String(127), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    translated: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {_COPILOT_STATUS_VALUES}", name="ck_copilot_queries_status"),
+        Index("ix_copilot_queries_status", "status"),
+        Index("ix_copilot_queries_view_id", "view_id"),
+        Index("ix_copilot_queries_created_at", "created_at"),
+    )

@@ -37,9 +37,12 @@ from cascade.application.serving.commands import (
 from cascade.application.serving.service import ServingApplicationService
 from cascade.application.governance.commands import RecordCostCommand, RegisterSloCommand
 from cascade.application.governance.service import GovernanceApplicationService
+from cascade.application.copilot.commands import AskCommand
+from cascade.application.copilot.service import CopilotApplicationService
 from cascade.infrastructure.clickhouse.factory import build_clickhouse_runtime
 from cascade.infrastructure.config import get_settings
 from cascade.infrastructure.connect.factory import build_connector_runtime
+from cascade.infrastructure.copilot.factory import build_translator
 from cascade.infrastructure.cost.factory import build_cost_source
 from cascade.infrastructure.database.engine import create_engine, create_session_factory
 from cascade.infrastructure.database.unit_of_work import SqlAlchemyUnitOfWork
@@ -110,6 +113,11 @@ async def _seed() -> None:
     )
     governance_service = GovernanceApplicationService(
         lambda: SqlAlchemyUnitOfWork(session_factory), build_cost_source(settings)
+    )
+    copilot_service = CopilotApplicationService(
+        lambda: SqlAlchemyUnitOfWork(session_factory),
+        build_translator(settings),
+        build_clickhouse_runtime(settings),
     )
     try:
         for command in _SEEDS:
@@ -266,6 +274,17 @@ async def _seed() -> None:
                         )
                     )
                     _logger.info("seed_cost_created", id=entry.id, category=category)
+
+                answer = await copilot_service.ask(
+                    AskCommand(
+                        question="total revenue by region",
+                        view_name="analytics.orders_daily",
+                        execute=False,
+                    )
+                )
+                _logger.info(
+                    "seed_copilot_asked", id=answer.id, status=answer.status
+                )
             except ConflictError:
                 _logger.info("seed_dataset_skipped", name="bronze.orders")
     finally:

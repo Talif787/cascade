@@ -6,6 +6,8 @@ from fastapi import Depends, Request
 
 from cascade.application.contracts.registry import SchemaRegistry
 from cascade.application.contracts.service import DataContractApplicationService
+from cascade.application.copilot.service import CopilotApplicationService
+from cascade.application.copilot.translator import Nl2SqlTranslator
 from cascade.application.governance.cost_source import CostSource
 from cascade.application.governance.service import GovernanceApplicationService
 from cascade.application.ingestion.runtime import ConnectorRuntime
@@ -58,6 +60,10 @@ def get_cost_source(request: Request) -> CostSource:
     return cast(CostSource, request.app.state.cost_source)
 
 
+def get_translator(request: Request) -> Nl2SqlTranslator:
+    return cast(Nl2SqlTranslator, request.app.state.translator)
+
+
 def get_pipeline_service(request: Request) -> PipelineApplicationService:
     return PipelineApplicationService(request.app.state.uow_factory)
 
@@ -100,6 +106,14 @@ def get_governance_service(request: Request) -> GovernanceApplicationService:
     )
 
 
+def get_copilot_service(request: Request) -> CopilotApplicationService:
+    return CopilotApplicationService(
+        request.app.state.uow_factory,
+        request.app.state.translator,
+        request.app.state.clickhouse_runtime,
+    )
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CacheDep = Annotated[Cache, Depends(get_cache)]
 PipelineServiceDep = Annotated[PipelineApplicationService, Depends(get_pipeline_service)]
@@ -111,3 +125,4 @@ ProcessingServiceDep = Annotated[
 LakehouseServiceDep = Annotated[LakehouseApplicationService, Depends(get_lakehouse_service)]
 ServingServiceDep = Annotated[ServingApplicationService, Depends(get_serving_service)]
 GovernanceServiceDep = Annotated[GovernanceApplicationService, Depends(get_governance_service)]
+CopilotServiceDep = Annotated[CopilotApplicationService, Depends(get_copilot_service)]
