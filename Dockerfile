@@ -27,6 +27,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY scripts ./scripts
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER cascade
 EXPOSE 8000
