@@ -26,7 +26,7 @@ dependencies = [
     "opentelemetry-api>=1.29",
     "opentelemetry-sdk>=1.44.0",
     "opentelemetry-exporter-otlp-proto-http>=1.29",
-    "opentelemetry-instrumentation-fastapi>=0.50b0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
     # Security floors for transitive packages (see SECURITY.md and the release-image scan).
     "msgpack>=1.2.1",
